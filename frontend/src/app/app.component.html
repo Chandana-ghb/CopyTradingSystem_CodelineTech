@@ -42,24 +42,85 @@
       </button>
     </div>
 
-    <!-- Stock Selector Dropdown with LTP for all stocks -->
-    <div class="stock-selector-container">
-      <label for="stockSelect" class="selector-label">SELECT {{ selectedCategory }}:</label>
-      <select 
-        id="stockSelect" 
-        class="stock-dropdown" 
-        [ngModel]="selectedSymbol" 
-        (ngModelChange)="onSymbolChange($event)">
-        <option *ngFor="let s of stocks" [value]="s.symbol">
-          {{ s.name }} (LTP: ₹{{ s.price.toFixed(2) }})
-        </option>
-      </select>
+    <!-- Unified Search & Selection Dropdown in One Control -->
+    <div class="unified-search-selector-wrapper">
+      <div class="unified-combo-box" [class.is-open]="isDropdownOpen">
+        <span class="combo-search-icon">🔍</span>
+
+        <input 
+          type="text" 
+          class="combo-input" 
+          [placeholder]="activeTick ? 'Search ' + selectedCategory + ' (e.g. ' + (selectedCategory === 'MCX' ? 'GOLD, SILVER, CRUDEOIL' : 'TCS, RELIANCE, INFY') + ')...' : 'Search & Select ' + selectedCategory + '...'" 
+          [(ngModel)]="stockSearchQuery" 
+          (ngModelChange)="onSearchChange($event)"
+          (focus)="openDropdown()" />
+
+        <!-- Selected Active Pill Inside Combo Box (when not searching) -->
+        <div class="combo-selected-pill" *ngIf="activeTick && !stockSearchQuery" (click)="toggleDropdown()">
+          <span class="active-sym-tag">{{ activeTick.name }}</span>
+          <span class="active-ltp-tag">₹{{ activeTick.price.toFixed(2) }}</span>
+        </div>
+
+        <!-- Clear Search Button -->
+        <button 
+          *ngIf="stockSearchQuery" 
+          type="button"
+          class="combo-clear-btn" 
+          (click)="clearSearch(); $event.stopPropagation()" 
+          title="Clear search">✕</button>
+
+        <!-- Dropdown Toggle Arrow -->
+        <button 
+          type="button"
+          class="combo-arrow-btn" 
+          (click)="toggleDropdown()" 
+          title="Toggle stock list">
+          <span class="arrow-icon">{{ isDropdownOpen ? '▲' : '▼' }}</span>
+        </button>
+      </div>
+
+      <!-- Backdrop overlay to dismiss dropdown when clicking outside -->
+      <div class="combo-backdrop" *ngIf="isDropdownOpen" (click)="closeDropdown()"></div>
+
+      <!-- Dropdown Menu List -->
+      <div class="combo-dropdown-menu animate-fade" *ngIf="isDropdownOpen">
+        <div class="combo-menu-header">
+          <span class="menu-header-title">📊 {{ selectedCategory }} ({{ filteredStocks.length }} available)</span>
+          <span class="menu-header-hint" *ngIf="stockSearchQuery">Filtering: "{{ stockSearchQuery }}"</span>
+        </div>
+
+        <div class="combo-items-list">
+          <div 
+            *ngFor="let s of filteredStocks" 
+            class="combo-option-item" 
+            [class.selected]="s.symbol === selectedSymbol"
+            (click)="selectStockItem(s)">
+            
+            <div class="option-left">
+              <span class="option-check">{{ s.symbol === selectedSymbol ? '✓' : '•' }}</span>
+              <span class="option-name">{{ s.name }}</span>
+              <span class="option-cat-badge">{{ s.category }}</span>
+            </div>
+
+            <div class="option-right">
+              <span class="option-price">₹{{ s.price.toFixed(2) }}</span>
+              <span class="option-change" [class.up]="s.change >= 0" [class.down]="s.change < 0">
+                {{ s.change >= 0 ? '+' : '' }}{{ s.change.toFixed(2) }} ({{ s.changePercent.toFixed(2) }}%)
+              </span>
+            </div>
+          </div>
+
+          <div *ngIf="filteredStocks.length === 0" class="combo-no-results">
+            🔍 No {{ selectedCategory }} stocks found matching "{{ stockSearchQuery }}"
+          </div>
+        </div>
+      </div>
     </div>
 
     <!-- Live Ticker Stats -->
     <div class="ticker-bar" *ngIf="activeTick">
       <div class="ticker-item">
-        <span class="label">LTP (HISTORICAL)</span>
+        <span class="label">LIVE LTP</span>
         <span class="val price" [class.up]="activeTick.change >= 0" [class.down]="activeTick.change < 0">
           ₹{{ activeTick.price.toFixed(2) }}
         </span>
@@ -78,6 +139,21 @@
         <span class="label">LOW</span>
         <span class="val text-low">₹{{ activeTick.low.toFixed(2) }}</span>
       </div>
+      <div class="ticker-item time-item">
+        <span class="label">MARKET TIME (IST)</span>
+        <span class="val time-val">⏱ {{ currentMarketTime }}</span>
+      </div>
+      <div class="ticker-item date-item">
+        <span class="label">LIVE DATE (IST)</span>
+        <span class="val date-val">📅 {{ currentMarketDate }}</span>
+      </div>
+      <div class="ticker-item status-item">
+        <span class="label">MARKET STATUS</span>
+        <span class="market-status-pill" [class.open]="isMarketOpen" [class.closed]="!isMarketOpen">
+          <span class="status-indicator-dot"></span>
+          {{ marketStatusText }}
+        </span>
+      </div>
     </div>
   </header>
 
@@ -95,50 +171,143 @@
     </div>
   </div>
 
-  <!-- Main Trading Area (Chart / Historical Data + Order Panel) -->
+  <!-- Main Trading Area (Chart / Live Data + Order Panel) -->
   <main class="main-content">
     <div class="trading-grid">
       
-      <!-- Chart / Historical Data Card -->
+      <!-- Chart / Live Data Card -->
       <div class="chart-card">
-        <div class="chart-header">
-          <div class="symbol-info">
-            <h2>{{ activeTick?.name || 'STOCK' }}</h2>
-            <span class="symbol-tag">{{ selectedSymbol }}</span>
-            <span class="category-badge">{{ selectedCategory }}</span>
+        <!-- Fyers Web Charts Unified Professional Toolbar -->
+        <div class="fyers-chart-toolbar">
+          <!-- Left: Symbol, Exchange Badge, Live Market Pulse, Time Intervals -->
+          <div class="fyers-left-section">
+            <div class="fyers-symbol-badge">
+              <span class="fyers-symbol-name">{{ activeTick?.name || selectedSymbol }}</span>
+              <span class="fyers-exchange-tag">{{ selectedCategory }}</span>
+              <span class="fyers-live-dot" title="Live Market Stream Active"></span>
+            </div>
+
+            <div class="fyers-v-sep"></div>
+
+            <!-- Timeframe Interval Selector Grouped by Seconds, Minutes, Hours, Days (Fyers Style) -->
+            <div class="fyers-timeframe-selector">
+              <!-- Seconds -->
+              <div class="tf-cat-pill">
+                <span class="tf-cat-title">SEC</span>
+                <button 
+                  *ngFor="let tf of secondTimeframes" 
+                  class="fyers-tf-btn" 
+                  [class.active]="selectedTimeframe === tf.value"
+                  (click)="setTimeframe(tf.value)">
+                  {{ tf.label }}
+                </button>
+              </div>
+
+              <div class="fyers-v-sep"></div>
+
+              <!-- Minutes -->
+              <div class="tf-cat-pill">
+                <span class="tf-cat-title">MIN</span>
+                <button 
+                  *ngFor="let tf of minuteTimeframes" 
+                  class="fyers-tf-btn" 
+                  [class.active]="selectedTimeframe === tf.value"
+                  (click)="setTimeframe(tf.value)">
+                  {{ tf.label }}
+                </button>
+              </div>
+
+              <div class="fyers-v-sep"></div>
+
+              <!-- Hours -->
+              <div class="tf-cat-pill">
+                <span class="tf-cat-title">HOUR</span>
+                <button 
+                  *ngFor="let tf of hourTimeframes" 
+                  class="fyers-tf-btn" 
+                  [class.active]="selectedTimeframe === tf.value"
+                  (click)="setTimeframe(tf.value)">
+                  {{ tf.label }}
+                </button>
+              </div>
+
+              <div class="fyers-v-sep"></div>
+
+              <!-- Days -->
+              <div class="tf-cat-pill">
+                <span class="tf-cat-title">DAY</span>
+                <button 
+                  *ngFor="let tf of dayTimeframes" 
+                  class="fyers-tf-btn" 
+                  [class.active]="selectedTimeframe === tf.value"
+                  (click)="setTimeframe(tf.value)">
+                  {{ tf.label }}
+                </button>
+              </div>
+            </div>
           </div>
 
-          <div class="view-mode-toggle">
-            <button 
-              class="toggle-btn" 
-              [class.active]="activeViewTab === 'CHART'" 
-              (click)="activeViewTab = 'CHART'">
-              📈 CHART VIEW
-            </button>
-            <button 
-              class="toggle-btn" 
-              [class.active]="activeViewTab === 'HISTORICAL_TABLE'" 
-              (click)="activeViewTab = 'HISTORICAL_TABLE'">
-              📊 HISTORICAL CANDLES ({{ historicalCandles.length }})
-            </button>
+          <!-- Center/Right: Live Data Date, Time, OHLC, LTP, Mode Switch -->
+          <div class="fyers-right-section" *ngIf="activeTick">
+            <!-- Live Date & Time based on live market stream -->
+            <div class="fyers-datetime-chip">
+              <span class="fyers-live-date">📅 {{ liveBarDateFormatted }}</span>
+              <span class="fyers-live-time">⏱ {{ liveBarTimeFormatted }} IST</span>
+            </div>
+
+            <!-- Active Bar OHLC Display -->
+            <div class="fyers-ohlc-chip" *ngIf="displayBar">
+              <span class="ohlc-unit"><span class="ohlc-tag">O</span> {{ displayBar.open.toFixed(2) }}</span>
+              <span class="ohlc-unit"><span class="ohlc-tag">H</span> <span class="text-high">{{ displayBar.high.toFixed(2) }}</span></span>
+              <span class="ohlc-unit"><span class="ohlc-tag">L</span> <span class="text-low">{{ displayBar.low.toFixed(2) }}</span></span>
+              <span class="ohlc-unit"><span class="ohlc-tag">C</span> <span [class.text-high]="displayBar.close >= displayBar.open" [class.text-low]="displayBar.close < displayBar.open">{{ displayBar.close.toFixed(2) }}</span></span>
+            </div>
+
+            <!-- Live LTP & Percentage -->
+            <div class="fyers-ltp-chip">
+              <span class="ltp-num" [class.up]="activeTick.change >= 0" [class.down]="activeTick.change < 0">
+                ₹{{ activeTick.price.toFixed(2) }}
+              </span>
+              <span class="ltp-badge" [class.up]="activeTick.change >= 0" [class.down]="activeTick.change < 0">
+                {{ activeTick.change >= 0 ? '+' : '' }}{{ activeTick.change.toFixed(2) }} ({{ activeTick.changePercent.toFixed(2) }}%)
+              </span>
+            </div>
+
+            <div class="fyers-v-sep"></div>
+
+            <!-- Switch between Chart View and Live 1-Min Table -->
+            <div class="fyers-view-switch">
+              <button 
+                class="fyers-view-btn" 
+                [class.active]="activeViewTab === 'CHART'" 
+                (click)="onSwitchToChart()">
+                📈 Chart
+              </button>
+              <button 
+                class="fyers-view-btn" 
+                [class.active]="activeViewTab === 'HISTORICAL_TABLE'" 
+                (click)="activeViewTab = 'HISTORICAL_TABLE'">
+                📊 Candles ({{ historicalCandles.length }})
+              </button>
+            </div>
           </div>
         </div>
 
-        <!-- Mode 1: TradingView Chart Canvas -->
+        <!-- Mode 1: TradingView Chart Canvas (100% Full Unobstructed View) -->
         <div 
-          #chartContainer 
-          class="chart-canvas-container" 
+          class="chart-canvas-wrapper" 
           [style.display]="activeViewTab === 'CHART' ? 'block' : 'none'">
+          <div #chartContainer class="chart-canvas-container"></div>
         </div>
 
-        <!-- Mode 2: Historical Candles Data Table from Data/MCX or Data/Nifty50 file -->
+        <!-- Mode 2: Live Candles Data Table from Data/MCX or Data/Nifty50 file -->
         <div class="historical-table-container" *ngIf="activeViewTab === 'HISTORICAL_TABLE'">
           <div class="historical-header-info">
-            <span>📁 Source: <strong>Data/{{ selectedCategory === 'MCX' ? 'MCX' : 'Nifty50' }}/{{ activeTick?.name }}.txt</strong></span>
-            <span>Timeframe: <strong style="color: #3b82f6;">⏱ 1-Minute (Resolution: 1)</strong></span>
-            <span>Market Hours: <strong style="color: #10b981;">{{ selectedCategory === 'MCX' ? '09:15 AM - 11:30 PM' : '09:15 AM - 03:30 PM' }}</strong></span>
-            <span>Date Range: <strong>01-Sep-2026 to 01-Oct-2026</strong></span>
-            <span>Total 1-Min Candles: <strong>{{ historicalCandles.length.toLocaleString() }}</strong></span>
+            <span>📁 Storage: <strong>Data/{{ selectedCategory === 'MCX' ? 'MCX' : 'Nifty50' }}/{{ activeTick?.name }}.txt</strong></span>
+            <span>Timeframe: <strong style="color: #3b82f6;">⏱ 1-Minute Live Bars</strong></span>
+            <span>Market Hours: <strong style="color: #10b981;">{{ selectedCategory === 'MCX' ? '09:00 AM - 11:30 PM (MCX)' : '09:15 AM - 03:30 PM (NSE)' }}</strong></span>
+            <span>Live Session: <strong style="color: #26a69a;">📅 {{ currentMarketDate }} (Continuous Feed)</strong></span>
+            <span>Total Live Candles: <strong>{{ historicalCandles.length.toLocaleString() }}</strong></span>
             <button class="sort-toggle-btn" (click)="toggleSortOrder()">
               {{ candleSortOrder === 'DESC' ? '⬇ Latest First' : '⬆ Oldest First' }}
             </button>
@@ -148,7 +317,7 @@
             <table class="data-table">
               <thead>
                 <tr>
-                  <th>DATE & TIME</th>
+                  <th>DATE & TIME (IST)</th>
                   <th>TIMESTAMP (1-MIN)</th>
                   <th>OPEN (₹)</th>
                   <th>HIGH (₹)</th>
@@ -177,14 +346,14 @@
                 </tr>
                 <tr *ngIf="historicalCandles.length === 0">
                   <td colspan="8" class="empty-state">
-                    {{ isLoadingCandles ? 'Loading 1-minute historical candle data from file...' : 'No historical data found.' }}
+                    {{ isLoadingCandles ? 'Loading 1-minute live candle data from stream...' : 'No live candle data found.' }}
                   </td>
                 </tr>
               </tbody>
             </table>
           </div>
 
-          <!-- Pagination Bar for 1-minute historical candles -->
+          <!-- Pagination Bar for 1-minute live candles -->
           <div class="candle-pagination-bar" *ngIf="historicalCandles.length > 0">
             <span class="pagination-info">
               Showing page <strong>{{ candlePage }}</strong> of <strong>{{ totalCandlePages }}</strong> ({{ candlePageSize }} candles per page)
@@ -209,7 +378,7 @@
           <div class="price-large" [class.up]="activeTick.change >= 0" [class.down]="activeTick.change < 0">
             ₹{{ activeTick.price.toFixed(2) }}
           </div>
-          <div class="price-sub">Historical LTP for {{ activeTick.name }} ({{ selectedCategory }})</div>
+          <div class="price-sub">Live LTP for {{ activeTick.name }} ({{ selectedCategory }})</div>
         </div>
 
         <div class="order-buttons-group">
@@ -229,7 +398,6 @@
             <span class="child-name">{{ child.name }}</span>
             <span class="child-multiplier">{{ child.multiplier }}x Qty</span>
           </div>
-          <div class="preview-note">✓ Saves to ParentOrders & ChildOrders tables in SQL Database</div>
         </div>
       </div>
 
@@ -239,28 +407,36 @@
     <section class="orders-section">
       <div class="section-header">
         <div class="title-wrap">
-          <h2>👑 PARENT CLIENT ORDERS (CHANDANA - P001)</h2>
-          <span class="subtitle">Primary execution orders stored in database (ParentOrders table)</span>
+          <div class="title-row">
+            <h2>👑 PARENT CLIENT ORDERS (CHANDANA - P001)</h2>
+            <span class="badge-pulse">⚡ LATEST ORDER ONLY</span>
+          </div>
         </div>
-        <span class="count-badge">{{ parentOrders.length }} Orders</span>
+        <div class="header-actions">
+          <span class="count-badge">💾 {{ totalParentOrdersCount }} Stored in DB</span>
+          <button class="btn btn-history" (click)="openDbHistoryModal('parent')" title="View all parent orders saved in database">
+            📜 View DB History ({{ totalParentOrdersCount }})
+          </button>
+        </div>
       </div>
 
       <div class="table-container">
         <table class="data-table">
           <thead>
             <tr>
+              <th>STATUS</th>
               <th>ORDER ID</th>
               <th>SYMBOL</th>
               <th>TYPE</th>
               <th>PRICE</th>
               <th>QTY</th>
               <th>TOTAL VALUE</th>
-              <th>STATUS</th>
               <th>PLACED TIME</th>
             </tr>
           </thead>
           <tbody>
-            <tr *ngFor="let ord of parentOrders" class="animate-fade">
+            <tr *ngFor="let ord of parentOrders" class="animate-fade latest-order-row">
+              <td><span class="status-executed">✓ {{ ord.orderStatus }} (LATEST)</span></td>
               <td><strong>#{{ ord.orderId }}</strong></td>
               <td>{{ ord.symbol }}</td>
               <td>
@@ -271,8 +447,7 @@
               <td>₹{{ ord.price.toFixed(2) }}</td>
               <td><strong>{{ ord.quantity }}</strong></td>
               <td>₹{{ (ord.price * ord.quantity).toFixed(2) }}</td>
-              <td><span class="status-executed">✓ {{ ord.orderStatus }}</span></td>
-              <td>{{ ord.placedAt | date:'HH:mm:ss dd-MMM' }}</td>
+              <td>{{ ord.placedAt | date:'HH:mm:ss dd-MMM-yyyy' }}</td>
             </tr>
             <tr *ngIf="parentOrders.length === 0">
               <td colspan="8" class="empty-state">No parent orders placed yet. Click Buy or Sell above!</td>
@@ -286,49 +461,96 @@
     <section class="orders-section">
       <div class="section-header">
         <div class="title-wrap">
-          <h2>👥 CHILD ACCOUNTS REPLICATED ORDERS</h2>
-          <span class="subtitle">Real-time order mirroring stored in database (ChildOrders table)</span>
+          <div class="title-row">
+            <h2>👥 CHILD CLIENT ACCOUNT ORDERS</h2>
+            <span class="badge-pulse">⚡ LATEST ORDER PER CLIENT</span>
+          </div>
+        </div>
+        <div class="header-actions">
+          <span class="count-badge">💾 {{ totalChildOrdersCount }} Stored in DB</span>
+          <button class="btn btn-history" (click)="openDbHistoryModal('child')" title="View all child orders saved in database">
+            📜 View Child DB History ({{ totalChildOrdersCount }})
+          </button>
         </div>
       </div>
 
       <div class="child-accounts-grid">
-        <div class="child-card" *ngFor="let child of childAccounts">
-          <div class="child-card-header">
-            <div class="child-info">
-              <h3>{{ child.name }}</h3>
-              <span class="badge badge-child">{{ child.id }}</span>
+        <div class="child-card modern-child-card" *ngFor="let child of childAccounts">
+          <!-- Card Top Bar: Client Avatar, Info, Status -->
+          <div class="child-card-top">
+            <div class="child-avatar-wrap">
+              <div class="child-avatar" [attr.data-id]="child.id">
+                {{ child.name.charAt(0) }}
+              </div>
+              <div class="child-meta-text">
+                <div class="child-name-row">
+                  <h3 class="child-title">{{ child.name }}</h3>
+                  <span class="child-id-chip">{{ child.id }}</span>
+                </div>
+                <div class="child-live-status">
+                  <span class="live-pulse-dot"></span>
+                  <span class="live-status-text">Active Mirroring (1:1 Same Qty)</span>
+                </div>
+              </div>
             </div>
-            <div class="multiplier-tag">Multiplier: {{ child.multiplier }}x</div>
+            <div class="child-balance-pill">
+              <span class="bal-label">BALANCE</span>
+              <span class="bal-amount">₹{{ child.balance | number:'1.2-2' }}</span>
+            </div>
           </div>
 
-          <div class="table-container compact">
-            <table class="data-table compact-table">
-              <thead>
-                <tr>
-                  <th>CO ID</th>
-                  <th>TYPE</th>
-                  <th>PRICE</th>
-                  <th>QTY</th>
-                  <th>TIME</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr *ngFor="let ord of childOrdersMap[child.id]" class="animate-fade">
-                  <td>#{{ ord.childOrderId }}</td>
-                  <td>
-                    <span class="badge" [class.badge-buy]="ord.orderType === 'BUY'" [class.badge-sell]="ord.orderType === 'SELL'">
-                      {{ ord.orderType }}
-                    </span>
-                  </td>
-                  <td>₹{{ ord.price.toFixed(2) }}</td>
-                  <td><strong class="qty-highlight">{{ ord.quantity }}</strong></td>
-                  <td>{{ ord.replicatedAt | date:'HH:mm:ss' }}</td>
-                </tr>
-                <tr *ngIf="!childOrdersMap[child.id] || childOrdersMap[child.id].length === 0">
-                  <td colspan="5" class="empty-state">Awaiting parent order...</td>
-                </tr>
-              </tbody>
-            </table>
+          <!-- Card Body: Latest Replicated Order -->
+          <div class="child-order-container">
+            <div class="order-header-line">
+              <span class="order-header-title">⚡ LATEST ORDER</span>
+              <span class="db-count-pill">💾 {{ childOrdersDbCount[child.id] || 0 }} in DB</span>
+            </div>
+
+            <!-- If order exists: clean structured metric box -->
+            <div *ngIf="childOrdersMap[child.id] && childOrdersMap[child.id].length > 0; else noChildOrder" class="child-execution-box animate-fade">
+              <div class="exec-primary-row">
+                <div class="exec-symbol-type">
+                  <span class="badge" [class.badge-buy]="childOrdersMap[child.id][0].orderType === 'BUY'" [class.badge-sell]="childOrdersMap[child.id][0].orderType === 'SELL'">
+                    {{ childOrdersMap[child.id][0].orderType }}
+                  </span>
+                  <span class="exec-symbol">{{ childOrdersMap[child.id][0].symbol }}</span>
+                </div>
+                <div class="exec-order-id">#{{ childOrdersMap[child.id][0].childOrderId }}</div>
+              </div>
+
+              <div class="exec-metrics-grid">
+                <div class="metric-item">
+                  <span class="m-label">EXEC PRICE</span>
+                  <span class="m-val">₹{{ childOrdersMap[child.id][0].price.toFixed(2) }}</span>
+                </div>
+                <div class="metric-item">
+                  <span class="m-label">REPLICATED QTY</span>
+                  <span class="m-val qty-highlight">{{ childOrdersMap[child.id][0].quantity }} Shares</span>
+                </div>
+                <div class="metric-item">
+                  <span class="m-label">TOTAL VALUE</span>
+                  <span class="m-val">₹{{ (childOrdersMap[child.id][0].price * childOrdersMap[child.id][0].quantity).toFixed(2) }}</span>
+                </div>
+                <div class="metric-item">
+                  <span class="m-label">REPLICATED TIME</span>
+                  <span class="m-val time-val">{{ childOrdersMap[child.id][0].replicatedAt | date:'HH:mm:ss' }}</span>
+                </div>
+              </div>
+
+              <div class="exec-status-footer">
+                <span class="exec-badge-success">✓ {{ childOrdersMap[child.id][0].orderStatus }}</span>
+                <span class="parent-ref">Mirrored from Parent #{{ childOrdersMap[child.id][0].parentOrderId }}</span>
+              </div>
+            </div>
+
+            <!-- Empty State when awaiting order -->
+            <ng-template #noChildOrder>
+              <div class="child-empty-state">
+                <div class="empty-icon">📡</div>
+                <div class="empty-title">Ready for Copy Trading</div>
+                <div class="empty-desc">Waiting for parent order from Chandana (P001). Replicates 1:1 instantly.</div>
+              </div>
+            </ng-template>
           </div>
         </div>
       </div>
@@ -371,11 +593,11 @@
         </div>
 
         <div class="multiplier-breakdown">
-          <div class="breakdown-header">Replicated Child Orders Preview:</div>
+          <div class="breakdown-header">Replicated Child Orders Preview (1:1 Same Quantity):</div>
           <div class="breakdown-grid">
             <div class="breakdown-item" *ngFor="let child of childAccounts">
               <span class="c-name">{{ child.name }}</span>
-              <span class="c-qty">{{ (modalQuantity * child.multiplier).toFixed(0) }} Qty</span>
+              <span class="c-qty">{{ modalQuantity }} Qty (Same as Parent)</span>
             </div>
           </div>
         </div>
@@ -391,6 +613,128 @@
           (click)="confirmOrder()">
           {{ isSubmitting ? 'EXECUTING...' : 'CONFIRM ' + modalOrderType + ' ORDER' }}
         </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Full Database Order History Modal Popup -->
+  <div class="modal-overlay" *ngIf="showDbHistoryModal" (click)="closeDbHistoryModal()">
+    <div class="modal-card history-modal animate-fade" (click)="$event.stopPropagation()">
+      <div class="modal-header history-header">
+        <div>
+          <h3>💾 Full Database Order History (Stored in SQL)</h3>
+          <p class="subtitle">Complete persistent audit log from `ParentOrders` & `ChildOrders` database tables</p>
+        </div>
+        <button class="modal-close" (click)="closeDbHistoryModal()">✕</button>
+      </div>
+
+      <!-- History Tabs Switcher -->
+      <div class="history-tabs-bar">
+        <button 
+          class="tab-btn" 
+          [class.active]="dbHistoryTab === 'parent'" 
+          (click)="dbHistoryTab = 'parent'">
+          👑 Parent Orders ({{ totalParentOrdersCount }} in DB)
+        </button>
+        <button 
+          class="tab-btn" 
+          [class.active]="dbHistoryTab === 'child'" 
+          (click)="dbHistoryTab = 'child'">
+          👥 Child Orders ({{ totalChildOrdersCount }} in DB)
+        </button>
+      </div>
+
+      <!-- Parent Orders DB History Table -->
+      <div class="modal-body history-body" *ngIf="dbHistoryTab === 'parent'">
+        <div class="table-container history-table-scroll">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>ORDER ID</th>
+                <th>ACCOUNT</th>
+                <th>SYMBOL</th>
+                <th>TYPE</th>
+                <th>PRICE</th>
+                <th>QTY</th>
+                <th>TOTAL VALUE</th>
+                <th>STATUS</th>
+                <th>PLACED TIME (IST)</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr *ngFor="let ord of allParentOrders; let i = index">
+                <td>
+                  <strong>#{{ ord.orderId }}</strong>
+                  <span *ngIf="i === 0" class="badge-mini-latest">LATEST</span>
+                </td>
+                <td>{{ ord.parentAccountId }}</td>
+                <td>{{ ord.symbol }}</td>
+                <td>
+                  <span class="badge" [class.badge-buy]="ord.orderType === 'BUY'" [class.badge-sell]="ord.orderType === 'SELL'">
+                    {{ ord.orderType }}
+                  </span>
+                </td>
+                <td>₹{{ ord.price.toFixed(2) }}</td>
+                <td><strong>{{ ord.quantity }}</strong></td>
+                <td>₹{{ (ord.price * ord.quantity).toFixed(2) }}</td>
+                <td><span class="status-executed">✓ {{ ord.orderStatus }}</span></td>
+                <td>{{ ord.placedAt | date:'dd-MMM-yyyy HH:mm:ss' }}</td>
+              </tr>
+              <tr *ngIf="allParentOrders.length === 0">
+                <td colspan="9" class="empty-state">No parent orders saved in database yet.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Child Orders DB History Table -->
+      <div class="modal-body history-body" *ngIf="dbHistoryTab === 'child'">
+        <div class="table-container history-table-scroll">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>CO ID</th>
+                <th>PARENT #</th>
+                <th>CHILD CLIENT</th>
+                <th>SYMBOL</th>
+                <th>TYPE</th>
+                <th>PRICE</th>
+                <th>QTY</th>
+                <th>STATUS</th>
+                <th>REPLICATED TIME (IST)</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr *ngFor="let ord of allChildOrders; let i = index">
+                <td>
+                  <strong>#{{ ord.childOrderId }}</strong>
+                  <span *ngIf="i === 0" class="badge-mini-latest">LATEST</span>
+                </td>
+                <td>#{{ ord.parentOrderId }}</td>
+                <td><strong>{{ ord.childAccountName }}</strong> ({{ ord.childAccountId }})</td>
+                <td>{{ ord.symbol }}</td>
+                <td>
+                  <span class="badge" [class.badge-buy]="ord.orderType === 'BUY'" [class.badge-sell]="ord.orderType === 'SELL'">
+                    {{ ord.orderType }}
+                  </span>
+                </td>
+                <td>₹{{ ord.price.toFixed(2) }}</td>
+                <td><strong class="qty-highlight">{{ ord.quantity }}</strong></td>
+                <td><span class="status-executed">✓ {{ ord.orderStatus }}</span></td>
+                <td>{{ ord.replicatedAt | date:'dd-MMM-yyyy HH:mm:ss' }}</td>
+              </tr>
+              <tr *ngIf="allChildOrders.length === 0">
+                <td colspan="9" class="empty-state">No child orders saved in database yet.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="modal-footer history-footer">
+        <span class="db-footer-note">✓ All previous orders are permanently stored in the database. Only the latest order is displayed on the main page to avoid expanding the layout.</span>
+        <button class="btn-cancel" (click)="closeDbHistoryModal()">Close</button>
       </div>
     </div>
   </div>

@@ -37,12 +37,12 @@ namespace FyersCopyTrading.Data
                 .WithMany()
                 .HasForeignKey(am => am.ChildAccountId)
                 .OnDelete(DeleteBehavior.Restrict);
-            // Seed Parent‑to‑Child Mappings with Quantity Multipliers (used for order replication)
+            // Seed Parent‑to‑Child Mappings (1:1 exact same quantity replication for all child accounts)
             modelBuilder.Entity<AccountMapping>().HasData(
                 new AccountMapping { MappingId = 1, ParentAccountId = "P001", ChildAccountId = "C001", QtyMultiplier = 1.0m, IsActive = true },
-                new AccountMapping { MappingId = 2, ParentAccountId = "P001", ChildAccountId = "C002", QtyMultiplier = 0.5m, IsActive = true },
-                new AccountMapping { MappingId = 3, ParentAccountId = "P001", ChildAccountId = "C003", QtyMultiplier = 2.0m, IsActive = true },
-                new AccountMapping { MappingId = 4, ParentAccountId = "P001", ChildAccountId = "C004", QtyMultiplier = 1.5m, IsActive = true }
+                new AccountMapping { MappingId = 2, ParentAccountId = "P001", ChildAccountId = "C002", QtyMultiplier = 1.0m, IsActive = true },
+                new AccountMapping { MappingId = 3, ParentAccountId = "P001", ChildAccountId = "C003", QtyMultiplier = 1.0m, IsActive = true },
+                new AccountMapping { MappingId = 4, ParentAccountId = "P001", ChildAccountId = "C004", QtyMultiplier = 1.0m, IsActive = true }
             );
     }
 }

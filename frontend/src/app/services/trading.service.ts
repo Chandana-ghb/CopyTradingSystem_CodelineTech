@@ -14,6 +14,12 @@ export interface StockTick {
   low: number;
   prevClose: number;
   timestamp: string;
+  candleTime?: number;
+  candleOpen?: number;
+  candleHigh?: number;
+  candleLow?: number;
+  candleClose?: number;
+  candleVolume?: number;
 }
 
 export interface HistoricalCandle {

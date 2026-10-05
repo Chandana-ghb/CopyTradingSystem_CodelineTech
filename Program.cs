@@ -20,7 +20,8 @@ builder.Services.AddDbContext<CopyTradingDbContext>(options =>
 // Register Application Services
 builder.Services.AddScoped<CopyTradingService>();
 builder.Services.AddScoped<HistoricalDataService>();
-        builder.Services.AddHostedService<MarketScheduler>();
+builder.Services.AddHostedService<FyersLiveMarketService>();
+builder.Services.AddHostedService<MarketScheduler>();
 
 // Dynamic CORS Policy for Angular Frontend (Supports localhost:4200, 50361, or any port)
 builder.Services.AddCors(options =>
@@ -36,14 +37,11 @@ builder.Services.AddCors(options =>
 
 var app = builder.Build();
 
-// Ensure Database Created & Seeded and Historical Data Files Initialized
+// Ensure Database Created & Seeded
 using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<CopyTradingDbContext>();
     db.Database.EnsureCreated();
-
-    var historicalService = scope.ServiceProvider.GetRequiredService<HistoricalDataService>();
-    await historicalService.InitializeAllHistoricalDataAsync();
 }
 
 if (app.Environment.IsDevelopment())

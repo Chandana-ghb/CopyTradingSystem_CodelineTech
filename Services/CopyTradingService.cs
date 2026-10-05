@@ -68,11 +68,11 @@ namespace FyersCopyTrading.Services
                     .ToListAsync();
             }
 
-            // 3. Replicate Orders for Each Child Account and save to ChildOrders table
+            // 3. Replicate Orders for Each Child Account (Exact same quantity as parent client account)
             var replicatedChildOrders = new List<ChildOrder>();
             foreach (var map in mappings)
             {
-                int childQty = (int)Math.Max(1, Math.Round(parentQty * map.QtyMultiplier));
+                int childQty = parentQty; // Exact same quantity replicated in all child client accounts
                 var childOrder = new ChildOrder
                 {
                     ParentOrderId = parentOrder.OrderId,

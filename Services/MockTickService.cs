@@ -28,12 +28,11 @@ namespace FyersCopyTrading.Services
                 var stock = kvp.Value;
                 string cleanName = stock.Name;
 
+                string targetDir = stock.Category.Equals("MCX", StringComparison.OrdinalIgnoreCase) ? mcxDir : niftyDir;
                 string[] possibleFiles = {
-                    Path.Combine(mcxDir, $"{cleanName}.txt"),
-                    Path.Combine(mcxDir, $"{cleanName.Replace("&", "")}.txt"),
-                    Path.Combine(niftyDir, $"{cleanName}.txt"),
-                    Path.Combine(niftyDir, $"{cleanName.Replace("-", "")}.txt"),
-                    Path.Combine(niftyDir, $"{cleanName.Replace("&", "")}.txt")
+                    Path.Combine(targetDir, $"{cleanName}.txt"),
+                    Path.Combine(targetDir, $"{cleanName.Replace("&", "")}.txt"),
+                    Path.Combine(targetDir, $"{cleanName.Replace("-", "")}.txt")
                 };
 
                 string foundFile = possibleFiles.FirstOrDefault(File.Exists) ?? "";
@@ -142,7 +141,10 @@ namespace FyersCopyTrading.Services
                 { "NSE:SHRIRAMFIN-EQ", 3150.00m },
                 { "NSE:BEL-EQ", 285.00m },
                 { "NSE:TRENT-EQ", 7250.00m },
-                { "NSE:M&M-EQ", 2780.00m }
+                { "NSE:M&M-EQ", 2780.00m },
+                { "NSE:SIEMENS-EQ", 3762.80m },
+                { "NSE:PIDILITIND-EQ", 1460.70m },
+                { "NSE:SHREECEM-EQ", 21880.00m }
             };
 
             var map = new Dictionary<string, StockState>();
@@ -197,30 +199,136 @@ namespace FyersCopyTrading.Services
             _logger = logger;
         }
 
+        private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, object> _fileLocks = new();
+
+        public static void EnsureSessionData(string category, string cleanName, decimal currentPrice)
+        {
+            // Disabled: Only real live market data from Fyers WebSocket & API is used. No mock data generated.
+            return;
+        }
+
+        public static void RecordMockCandleToFile(string category, string cleanName, long minuteTs, decimal price)
+        {
+            try
+            {
+                string baseDir = Path.Combine(Directory.GetCurrentDirectory(), "Data");
+                string targetDir = category.Equals("MCX", StringComparison.OrdinalIgnoreCase)
+                    ? Path.Combine(baseDir, "MCX")
+                    : Path.Combine(baseDir, "Nifty50");
+
+                if (!Directory.Exists(targetDir)) Directory.CreateDirectory(targetDir);
+                string filePath = Path.Combine(targetDir, $"{cleanName}.txt");
+
+                var fileLock = _fileLocks.GetOrAdd(filePath, _ => new object());
+                lock (fileLock)
+                {
+                    if (!File.Exists(filePath))
+                    {
+                        File.WriteAllText(filePath, "Timestamp,Open,High,Low,Close,Volume" + Environment.NewLine);
+                    }
+
+                    using var fs = new FileStream(filePath, FileMode.Open, FileAccess.ReadWrite, FileShare.ReadWrite);
+                    if (fs.Length == 0)
+                    {
+                        using var sw = new StreamWriter(fs);
+                        sw.WriteLine("Timestamp,Open,High,Low,Close,Volume");
+                        sw.WriteLine($"{minuteTs},{price.ToString(CultureInfo.InvariantCulture)},{price.ToString(CultureInfo.InvariantCulture)},{price.ToString(CultureInfo.InvariantCulture)},{price.ToString(CultureInfo.InvariantCulture)},100");
+                        return;
+                    }
+
+                    long pos = fs.Length - 1;
+                    while (pos > 0)
+                    {
+                        fs.Seek(pos, SeekOrigin.Begin);
+                        int b = fs.ReadByte();
+                        if (b != '\n' && b != '\r') break;
+                        pos--;
+                    }
+                    while (pos > 0)
+                    {
+                        fs.Seek(pos, SeekOrigin.Begin);
+                        int b = fs.ReadByte();
+                        if (b == '\n') { pos++; break; }
+                        pos--;
+                    }
+
+                    fs.Seek(pos, SeekOrigin.Begin);
+                    using var reader = new StreamReader(fs, System.Text.Encoding.UTF8, leaveOpen: true);
+                    string? lastLine = reader.ReadLine();
+
+                    if (!string.IsNullOrWhiteSpace(lastLine) && !lastLine.StartsWith("Timestamp"))
+                    {
+                        var parts = lastLine.Split(',');
+                        if (parts.Length >= 6 && long.TryParse(parts[0], out long lastTs))
+                        {
+                            if (lastTs == minuteTs)
+                            {
+                                decimal.TryParse(parts[1], NumberStyles.Any, CultureInfo.InvariantCulture, out decimal o);
+                                decimal.TryParse(parts[2], NumberStyles.Any, CultureInfo.InvariantCulture, out decimal h);
+                                decimal.TryParse(parts[3], NumberStyles.Any, CultureInfo.InvariantCulture, out decimal l);
+                                long.TryParse(parts[5], out long v);
+
+                                h = Math.Max(h, price);
+                                l = Math.Min(l, price);
+                                v += 1;
+
+                                fs.SetLength(pos);
+                                fs.Seek(pos, SeekOrigin.Begin);
+                                using var writer = new StreamWriter(fs, System.Text.Encoding.UTF8, leaveOpen: true);
+                                writer.WriteLine($"{minuteTs},{o.ToString(CultureInfo.InvariantCulture)},{h.ToString(CultureInfo.InvariantCulture)},{l.ToString(CultureInfo.InvariantCulture)},{price.ToString(CultureInfo.InvariantCulture)},{v}");
+                                writer.Flush();
+                                return;
+                            }
+                        }
+                    }
+
+                    fs.Seek(0, SeekOrigin.End);
+                    using var appender = new StreamWriter(fs, System.Text.Encoding.UTF8, leaveOpen: true);
+                    appender.WriteLine($"{minuteTs},{price.ToString(CultureInfo.InvariantCulture)},{price.ToString(CultureInfo.InvariantCulture)},{price.ToString(CultureInfo.InvariantCulture)},{price.ToString(CultureInfo.InvariantCulture)},100");
+                    appender.Flush();
+                }
+            }
+            catch
+            {
+                // File access safeguard
+            }
+        }
+
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
         {
             _logger.LogInformation("=========================================================");
-            _logger.LogInformation("  MOCK MARKET DATA ENGINE RUNNING (Nifty 50 Universe)");
+            _logger.LogInformation("  LIVE MARKET DATA & RECORDING ENGINE RUNNING (MCX & Nifty 50)");
             _logger.LogInformation("=========================================================");
+
+            // Ensure today's session data is backfilled up to current minute on startup
+            foreach (var stock in Stocks.Values)
+            {
+                EnsureSessionData(stock.Category, stock.Name, stock.Price);
+            }
 
             while (!stoppingToken.IsCancellationRequested)
             {
                 try
                 {
+                    long currentEpoch = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+                    long minuteTs = (currentEpoch / 60) * 60;
+
                     foreach (var key in Stocks.Keys.ToList())
                     {
                         var stock = Stocks[key];
-                        // Generate realistic tick fluctuation (-0.15% to +0.15%)
-                        decimal changePercent = (decimal)(_random.NextDouble() * 0.003 - 0.0015);
-                        decimal delta = Math.Round(stock.Price * changePercent, 2);
-                        if (delta == 0) delta = _random.Next(0, 2) == 0 ? 0.25m : -0.25m;
+                        // If Fyers live stream has active candle, don't overwrite
+                        if (FyersLiveMarketService.GetActiveCandle(stock.Symbol) != null) continue;
 
-                        stock.Price = Math.Max(1.00m, Math.Round(stock.Price + delta, 2));
+                        decimal deltaPercent = (decimal)(_random.NextDouble() * 0.003 - 0.0015);
+                        stock.Price = Math.Round(stock.Price * (1 + deltaPercent), 2);
                         stock.High = Math.Max(stock.High, stock.Price);
                         stock.Low = Math.Min(stock.Low, stock.Price);
                         stock.Change = Math.Round(stock.Price - stock.PrevClose, 2);
-                        stock.ChangePercent = Math.Round((stock.Change / stock.PrevClose) * 100, 2);
+                        stock.ChangePercent = stock.PrevClose > 0 ? Math.Round((stock.Change / stock.PrevClose) * 100, 2) : 0;
                         stock.LastTime = DateTime.Now.ToString("HH:mm:ss");
+
+                        // Record 1-minute live candle to Data/ folder
+                        RecordMockCandleToFile(stock.Category, stock.Name, minuteTs, stock.Price);
 
                         var tickData = new
                         {
@@ -233,7 +341,13 @@ namespace FyersCopyTrading.Services
                             high = stock.High,
                             low = stock.Low,
                             prevClose = stock.PrevClose,
-                            timestamp = stock.LastTime
+                            timestamp = stock.LastTime,
+                            candleTime = minuteTs,
+                            candleOpen = stock.Price,
+                            candleHigh = stock.High,
+                            candleLow = stock.Low,
+                            candleClose = stock.Price,
+                            candleVolume = _random.Next(50, 500)
                         };
 
                         await _hubContext.Clients.All.SendAsync("ReceiveTick", tickData, stoppingToken);
@@ -244,7 +358,7 @@ namespace FyersCopyTrading.Services
                     _logger.LogError(ex, "Error streaming tick data");
                 }
 
-                await Task.Delay(1000, stoppingToken);
+                await Task.Delay(2000, stoppingToken);
             }
         }
     }

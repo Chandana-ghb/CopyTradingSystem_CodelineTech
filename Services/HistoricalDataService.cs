@@ -19,15 +19,15 @@ namespace FyersCopyTrading.Services
 
         public static readonly Dictionary<string, string> McxUniverse = new()
         {
-            { "GOLD", "MCX:GOLD25OCTFUT" },
-            { "SILVER", "MCX:SILVER25DECFUT" },
-            { "NATGAS", "MCX:NATURALGAS25OCTFUT" },
-            { "CRUDEOIL", "MCX:CRUDEOIL25OCTFUT" },
-            { "COPPER", "MCX:COPPER25OCTFUT" },
-            { "ZINC", "MCX:ZINC25OCTFUT" },
-            { "LEAD", "MCX:LEAD25OCTFUT" },
-            { "ALUMINIUM", "MCX:ALUMINIUM25OCTFUT" },
-            { "NICKEL", "MCX:NICKEL25OCTFUT" }
+            { "GOLD", "MCX:GOLD26DECFUT" },
+            { "SILVER", "MCX:SILVER26DECFUT" },
+            { "NATGAS", "MCX:NATURALGAS26OCTFUT" },
+            { "CRUDEOIL", "MCX:CRUDEOIL26OCTFUT" },
+            { "COPPER", "MCX:COPPER26OCTFUT" },
+            { "ZINC", "MCX:ZINC26OCTFUT" },
+            { "LEAD", "MCX:LEAD26OCTFUT" },
+            { "ALUMINIUM", "MCX:ALUMINIUM26OCTFUT" },
+            { "NICKEL", "MCX:NICKEL26OCTFUT" }
         };
 
         public static readonly Dictionary<string, string> Nifty50Universe = new()
@@ -140,6 +140,10 @@ namespace FyersCopyTrading.Services
         private async Task FetchOrGenerateSymbolDataAsync(string fileName, string fyersSymbol, DateTime from, DateTime to, string outputDir, bool isMcx)
         {
             string filePath = Path.Combine(outputDir, $"{fileName}.txt");
+            if (File.Exists(filePath) && new FileInfo(filePath).Length > 1000)
+            {
+                return;
+            }
             bool success = false;
 
             try
@@ -194,7 +198,7 @@ namespace FyersCopyTrading.Services
             {
                 if (cur.DayOfWeek != DayOfWeek.Saturday && cur.DayOfWeek != DayOfWeek.Sunday)
                 {
-                    TimeSpan startTime = new TimeSpan(9, 15, 0); // Market starts at 9:15 AM for both Nifty 50 and MCX
+                    TimeSpan startTime = isMcx ? new TimeSpan(9, 0, 0) : new TimeSpan(9, 15, 0); // MCX starts at 9:00 AM, Nifty 50 starts at 9:15 AM
                     TimeSpan endTime = isMcx ? new TimeSpan(23, 30, 0) : new TimeSpan(15, 30, 0); // MCX ends at 11:30 PM, Nifty 50 ends at 3:30 PM
 
                     DateTime barTime = cur.Date.Add(startTime);
