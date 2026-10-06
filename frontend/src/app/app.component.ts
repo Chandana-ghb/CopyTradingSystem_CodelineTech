@@ -66,6 +66,11 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewInit {
   public activeTick: StockTick | null = null;
   public ticksMap: { [symbol: string]: StockTick } = {};
 
+  // Master Stocks for Child Account Search & Filtering (Both MCX and NIFTY50)
+  public masterStocksList: StockTick[] = [];
+  public childStockSearchQuery: { [childId: string]: string } = {};
+  public childStockDropdownOpen: { [childId: string]: boolean } = {};
+
   // 9 Canonical MCX Commodities
   public static readonly MCX_COMMODITIES: StockTick[] = [
     { symbol: 'MCX:GOLD', name: 'GOLD', category: 'MCX', price: 0, high: 0, low: 0, prevClose: 0, change: 0, changePercent: 0, timestamp: '' },
@@ -114,11 +119,11 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewInit {
 
   // Accounts & Balances
   public parentBalance = 1000000;
-  public childAccounts = [
-    { id: 'C001', name: 'Ramu', multiplier: 1.0, balance: 500000 },
-    { id: 'C002', name: 'Seenu', multiplier: 1.0, balance: 500000 },
-    { id: 'C003', name: 'Priya', multiplier: 1.0, balance: 500000 },
-    { id: 'C004', name: 'Arjun', multiplier: 1.0, balance: 500000 }
+  public childAccounts: any[] = [
+    { id: 'C001', name: 'Ramu', multiplier: 0.1, balance: 500000, isActive: true, allocationMode: 'RATIO', fixedQuantity: 1, allowedSymbols: 'ALL', isUpdating: false },
+    { id: 'C002', name: 'Seenu', multiplier: 0.5, balance: 500000, isActive: true, allocationMode: 'RATIO', fixedQuantity: 5, allowedSymbols: 'ALL', isUpdating: false },
+    { id: 'C003', name: 'Priya', multiplier: 1.0, balance: 500000, isActive: true, allocationMode: 'RATIO', fixedQuantity: 10, allowedSymbols: 'ALL', isUpdating: false },
+    { id: 'C004', name: 'Arjun', multiplier: 1.0, balance: 500000, isActive: true, allocationMode: 'RATIO', fixedQuantity: 10, allowedSymbols: 'ALL', isUpdating: false }
   ];
 
   public cleanAccountName(name: string): string {
@@ -140,24 +145,29 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewInit {
   public allParentOrders: ParentOrder[] = []; // Full history stored in database
   public totalParentOrdersCount = 0;
 
-  public childOrdersMap: { [childId: string]: ChildOrder[] } = {
-    'C001': [],
-    'C002': [],
-    'C003': [],
-    'C004': []
-  }; // Only the latest single order is displayed per child account
+  public childOrdersMap: { [childId: string]: ChildOrder[] } = {}; // Only the latest single order is displayed per child account
   public allChildOrders: ChildOrder[] = []; // Full history stored in database
-  public childOrdersDbCount: { [childId: string]: number } = {
-    'C001': 0,
-    'C002': 0,
-    'C003': 0,
-    'C004': 0
-  };
+  public childOrdersDbCount: { [childId: string]: number } = {};
   public totalChildOrdersCount = 0;
 
   // DB History Modal
   public showDbHistoryModal = false;
   public dbHistoryTab: 'parent' | 'child' = 'parent';
+
+  // History Search & Filter State
+  public historySearchSymbol = '';
+  public historyFilterDate = '';
+  public historySelectedChildId = 'ALL'; // 'ALL' or specific child 'C001', 'C002', etc.
+
+  // Create Client Modal State
+  public showCreateClientModal = false;
+  public newClientName = '';
+  public newClientBalance = 500000;
+  public newClientMultiplier = 1.0;
+  public newClientMode: 'RATIO' | 'FIXED' = 'RATIO';
+  public newClientFixedQty = 1;
+  public newClientAllowedSymbols = 'ALL';
+  public isSubmittingClient = false;
 
   constructor(private tradingService: TradingService) {}
 
@@ -175,6 +185,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewInit {
 
     // 3. Fetch Initial Stocks, Accounts, & Order History
     this.loadStocks();
+    this.loadMasterStocksList();
     this.loadAccounts();
     this.loadOrders();
 
@@ -240,12 +251,14 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewInit {
         if (parent) {
           this.parentBalance = parent.balance;
         }
-        this.childAccounts.forEach(ca => {
-          const matching = accs.find(a => a.accountId === ca.id);
-          if (matching) {
-            ca.balance = matching.balance;
-          }
-        });
+        this.syncChildAccountsWithData(accs);
+      })
+    );
+
+    // 6. Listen to Real-time SignalR Child Mappings Updates
+    this.subscriptions.add(
+      this.tradingService.mappingsUpdated$.subscribe(mappings => {
+        if (mappings) this.updateChildMappingsFromData(mappings);
       })
     );
   }
@@ -305,52 +318,52 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewInit {
   }
 
   public updateMarketClock() {
-    // Current IST Time calculation (UTC + 5 hours 30 mins)
-    const now = new Date();
-    const utcMs = now.getTime() + (now.getTimezoneOffset() * 60000);
-    const istTime = new Date(utcMs + (5.5 * 3600000));
+    try {
+      const now = new Date();
+      // Format IST Timezone accurately without local double-offset distortion
+      const istDateStr = now.toLocaleDateString('en-GB', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', year: 'numeric' });
+      const istTimeStr = now.toLocaleTimeString('en-GB', { timeZone: 'Asia/Kolkata', hour12: false });
 
-    const hours = istTime.getHours();
-    const minutes = istTime.getMinutes();
-    const seconds = istTime.getSeconds();
-    const dayOfWeek = istTime.getDay(); // 0 = Sunday, 6 = Saturday
+      this.currentMarketDate = istDateStr.replace(/ /g, '-');
+      this.currentMarketTime = istTimeStr;
 
-    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-    const dd = String(istTime.getDate()).padStart(2, '0');
-    const mon = months[istTime.getMonth()];
-    const yyyy = istTime.getFullYear();
-    this.currentMarketDate = `${dd}-${mon}-${yyyy}`;
+      const timeParts = istTimeStr.split(':').map(Number);
+      const hours = timeParts[0] || 0;
+      const minutes = timeParts[1] || 0;
+      const currentMinutes = hours * 60 + minutes;
 
-    const hh = String(hours).padStart(2, '0');
-    const mm = String(minutes).padStart(2, '0');
-    const ss = String(seconds).padStart(2, '0');
-    this.currentMarketTime = `${hh}:${mm}:${ss}`;
+      const dayFormatter = new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Kolkata', weekday: 'short' });
+      const dayName = dayFormatter.format(now);
+      const isWeekday = !['Sat', 'Sun'].includes(dayName);
 
-    const isWeekday = dayOfWeek >= 1 && dayOfWeek <= 5;
-    const currentMinutes = hours * 60 + minutes;
+      if (this.selectedCategory === 'MCX') {
+        // MCX Live Market: 09:00 AM (540 mins) to 11:30 PM (1410 mins)
+        const mcxOpenMinutes = 9 * 60;
+        const mcxCloseMinutes = 23 * 60 + 30;
+        const isOfficialOpen = isWeekday && currentMinutes >= mcxOpenMinutes && currentMinutes <= mcxCloseMinutes;
 
-    if (this.selectedCategory === 'MCX') {
-      // MCX Market Timings: 09:00 AM (540 mins) to 11:30 PM (1410 mins)
-      const mcxOpenMinutes = 9 * 60; // 09:00 AM
-      const mcxCloseMinutes = 23 * 60 + 30; // 11:30 PM
-      if (isWeekday && currentMinutes >= mcxOpenMinutes && currentMinutes <= mcxCloseMinutes) {
-        this.isMarketOpen = true;
-        this.marketStatusText = 'MCX OPEN (09:00 - 23:30)';
+        this.isMarketOpen = isOfficialOpen;
+        if (isOfficialOpen) {
+          this.marketStatusText = 'MCX LIVE (09:00 - 23:30)';
+        } else {
+          this.marketStatusText = isWeekday ? 'MCX CLOSED (09:00 - 23:30)' : 'MCX WEEKEND (CLOSED)';
+        }
       } else {
-        this.isMarketOpen = false;
-        this.marketStatusText = isWeekday ? 'MCX CLOSED (Opens 09:00)' : 'MCX WEEKEND CLOSED';
+        // NIFTY50 / NSE Live Market: 09:15 AM (555 mins) to 03:30 PM (930 mins)
+        const nseOpenMinutes = 9 * 60 + 15;
+        const nseCloseMinutes = 15 * 60 + 30;
+        const isOfficialOpen = isWeekday && currentMinutes >= nseOpenMinutes && currentMinutes <= nseCloseMinutes;
+
+        this.isMarketOpen = isOfficialOpen;
+        if (isOfficialOpen) {
+          this.marketStatusText = 'NIFTY50 LIVE (09:15 - 15:30)';
+        } else {
+          this.marketStatusText = isWeekday ? 'NIFTY50 CLOSED (09:15 - 15:30)' : 'NIFTY50 WEEKEND (CLOSED)';
+        }
       }
-    } else {
-      // NSE Nifty 50 Market Timings: 09:15 AM (555 mins) to 03:30 PM (930 mins)
-      const nseOpenMinutes = 9 * 60 + 15; // 09:15 AM
-      const nseCloseMinutes = 15 * 60 + 30; // 03:30 PM
-      if (isWeekday && currentMinutes >= nseOpenMinutes && currentMinutes <= nseCloseMinutes) {
-        this.isMarketOpen = true;
-        this.marketStatusText = 'NSE OPEN (09:15 - 15:30)';
-      } else {
-        this.isMarketOpen = false;
-        this.marketStatusText = isWeekday ? 'NSE CLOSED (Opens 09:15)' : 'NSE WEEKEND CLOSED';
-      }
+    } catch {
+      this.isMarketOpen = false;
+      this.marketStatusText = 'MARKET CLOSED';
     }
   }
 
@@ -491,24 +504,474 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewInit {
 
   public loadAccounts() {
     this.tradingService.getAccounts().subscribe(accs => {
+      if (!accs) return;
       const parent = accs.find(a => a.accountId === 'P001');
       if (parent) {
         this.parentBalance = parent.balance;
       }
-      this.childAccounts.forEach(ca => {
-        const matching = accs.find(a => a.accountId === ca.id);
-        if (matching) {
-          ca.balance = matching.balance;
-          if (matching.accountName) {
-            ca.name = this.cleanAccountName(matching.accountName);
-          }
-        }
-      });
+      this.syncChildAccountsWithData(accs);
     });
+
+    this.tradingService.getMappings().subscribe({
+      next: (mappings) => {
+        if (mappings && mappings.length > 0) {
+          this.updateChildMappingsFromData(mappings);
+        }
+      },
+      error: (err) => {
+        console.warn('Could not fetch mappings from DB:', err);
+      }
+    });
+  }
+
+  public syncChildAccountsWithData(accs: any[]) {
+    if (!accs) return;
+    const childs = accs.filter(a => a.accountType === 'CHILD');
+    const childIds = new Set(childs.map(c => c.accountId));
+
+    // Remove accounts deleted from DB
+    this.childAccounts = this.childAccounts.filter(ca => childIds.has(ca.id));
+
+    childs.forEach(c => {
+      let existing = this.childAccounts.find(ca => ca.id === c.accountId);
+      if (!existing) {
+        existing = {
+          id: c.accountId,
+          name: this.cleanAccountName(c.accountName),
+          multiplier: 1.0,
+          balance: c.balance,
+          isActive: c.isActive !== undefined ? c.isActive : true,
+          allocationMode: 'RATIO',
+          fixedQuantity: 1,
+          allowedSymbols: 'ALL',
+          isUpdating: false
+        };
+        this.childAccounts.push(existing);
+        if (!this.childOrdersMap[c.accountId]) {
+          this.childOrdersMap[c.accountId] = [];
+          this.childOrdersDbCount[c.accountId] = 0;
+        }
+      } else {
+        existing.balance = c.balance;
+        if (c.isActive !== undefined && c.isActive !== null) existing.isActive = c.isActive;
+        if (c.accountName) existing.name = this.cleanAccountName(c.accountName);
+      }
+    });
+
+    this.childAccounts.sort((a, b) => a.id.localeCompare(b.id));
+  }
+
+  public removeClient(child: any) {
+    if (!child || !child.id) return;
+    if (child.id === 'P001') {
+      this.showToastNotification('Cannot delete parent account.');
+      return;
+    }
+
+    if (!confirm(`Are you sure you want to remove client "${child.name} (${child.id})"?\n\nThis will permanently delete this client and all their mappings from the database.`)) {
+      return;
+    }
+
+    child.isUpdating = true;
+    this.tradingService.deleteClient(child.id).subscribe({
+      next: (res) => {
+        child.isUpdating = false;
+        this.showToastNotification(`🗑️ ${res?.message || 'Client account removed successfully.'}`);
+        this.loadAccounts();
+        this.loadOrders();
+      },
+      error: (err) => {
+        child.isUpdating = false;
+        this.showToastNotification(`❌ Failed to delete client: ${err.error?.message || err.message}`);
+      }
+    });
+  }
+
+  public updateChildMappingsFromData(mappings: any[]) {
+    if (!mappings || mappings.length === 0) return;
+    this.childAccounts.forEach(ca => {
+      const map = mappings.find((m: any) => m.childAccountId === ca.id);
+      if (map) {
+        if (map.isActive !== undefined && map.isActive !== null) {
+          ca.isActive = map.isActive === true || map.isActive === 1 || map.isActive === 'true';
+        }
+        if (map.qtyMultiplier !== undefined && map.qtyMultiplier !== null) {
+          ca.multiplier = Number(map.qtyMultiplier);
+        }
+        if (map.allocationMode) {
+          ca.allocationMode = map.allocationMode.toUpperCase();
+        }
+        if (map.fixedQuantity !== undefined && map.fixedQuantity !== null) {
+          ca.fixedQuantity = Number(map.fixedQuantity);
+        }
+        if (map.allowedSymbols !== undefined && map.allowedSymbols !== null) {
+          ca.allowedSymbols = map.allowedSymbols.trim() || 'ALL';
+        }
+      }
+    });
+  }
+
+  public toggleChildStatus(child: any) {
+    child.isUpdating = true;
+    this.tradingService.toggleChildActive(child.id).subscribe({
+      next: (res) => {
+        child.isUpdating = false;
+        if (res?.mapping?.isActive !== undefined) {
+          child.isActive = res.mapping.isActive;
+        } else {
+          child.isActive = !child.isActive;
+        }
+        if (res?.mappings) {
+          this.updateChildMappingsFromData(res.mappings);
+        }
+        this.showToastNotification(`Account ${child.name} is now ${child.isActive ? 'ACTIVE' : 'DEACTIVATED'} (Saved in Database)`);
+      },
+      error: (err) => {
+        child.isUpdating = false;
+        this.showToastNotification(`Failed to save status for ${child.name}`);
+      }
+    });
+  }
+
+  public saveChildSizing(child: any) {
+    child.isUpdating = true;
+    this.tradingService.updateChildSizing(child.id, child.multiplier, child.allocationMode, child.fixedQuantity, child.allowedSymbols).subscribe({
+      next: (res) => {
+        child.isUpdating = false;
+        if (res?.mapping) {
+          child.multiplier = Number(res.mapping.qtyMultiplier);
+          child.allocationMode = res.mapping.allocationMode;
+          child.fixedQuantity = Number(res.mapping.fixedQuantity);
+          if (res.mapping.allowedSymbols) child.allowedSymbols = res.mapping.allowedSymbols;
+        }
+        if (res?.mappings) {
+          this.updateChildMappingsFromData(res.mappings);
+        }
+        const info = child.allocationMode === 'FIXED' ? `${child.fixedQuantity} Fixed Lots` : `${child.multiplier}x Multiplier`;
+        this.showToastNotification(`Updated sizing for ${child.name} to ${info} (Saved in Database)`);
+      },
+      error: (err) => {
+        child.isUpdating = false;
+        this.showToastNotification(`Failed to save sizing for ${child.name}`);
+      }
+    });
+  }
+
+  public saveChildAllowedSymbols(child: any) {
+    child.isUpdating = true;
+    const syms = child.allowedSymbols?.trim() || 'ALL';
+    this.tradingService.updateAllowedSymbols(child.id, syms).subscribe({
+      next: (res) => {
+        child.isUpdating = false;
+        this.showToastNotification(`Allowed symbols for ${child.name} set to: '${syms}' (Saved in DB)`);
+      },
+      error: (err) => {
+        child.isUpdating = false;
+        this.showToastNotification(`Failed to save allowed symbols for ${child.name}`);
+      }
+    });
+  }
+
+  public setChildAllowedSymbolPreset(child: any, preset: string) {
+    child.allowedSymbols = preset;
+    this.saveChildAllowedSymbols(child);
+  }
+
+  public loadMasterStocksList() {
+    this.tradingService.getStocks().subscribe({
+      next: (stocks) => {
+        if (stocks && stocks.length > 0) {
+          this.masterStocksList = stocks;
+        } else {
+          this.masterStocksList = [...AppComponent.MCX_COMMODITIES];
+        }
+      },
+      error: () => {
+        this.masterStocksList = [...AppComponent.MCX_COMMODITIES];
+      }
+    });
+  }
+
+  public getFilteredStocksForChild(childId: string): StockTick[] {
+    const query = (this.childStockSearchQuery[childId] || '').trim().toLowerCase();
+    const list = this.masterStocksList.length > 0 ? this.masterStocksList : AppComponent.MCX_COMMODITIES;
+    if (!query) {
+      return list.slice(0, 10);
+    }
+    return list.filter(s => 
+      s.name.toLowerCase().includes(query) || 
+      s.symbol.toLowerCase().includes(query)
+    ).slice(0, 12);
+  }
+
+  public toggleChildStockDropdown(childId: string) {
+    this.childStockDropdownOpen[childId] = !this.childStockDropdownOpen[childId];
+  }
+
+  public openChildStockDropdown(childId: string) {
+    this.childStockDropdownOpen[childId] = true;
+  }
+
+  public closeChildStockDropdown(childId: string) {
+    setTimeout(() => {
+      this.childStockDropdownOpen[childId] = false;
+    }, 250);
+  }
+
+  public cleanStockToken(str: string): string {
+    if (!str) return '';
+    return str
+      .replace(/^NSE:/i, '')
+      .replace(/^MCX:/i, '')
+      .replace(/-EQ$/i, '')
+      .replace(/^BLOCK:/i, '')
+      .replace(/^NOT:/i, '')
+      .replace(/^!/i, '')
+      .trim();
+  }
+
+  public allowStockForChild(child: any, stockNameOrSymbol: string) {
+    const target = this.cleanStockToken(stockNameOrSymbol).toUpperCase();
+    if (!target) return;
+
+    let current = child.allowedSymbols ? child.allowedSymbols.trim() : 'ALL';
+    if (current === 'ALL' || !current) {
+      child.allowedSymbols = target;
+    } else {
+      let tokens = current.split(',').map((t: string) => t.trim()).filter((t: string) => t);
+      tokens = tokens.filter((t: string) => this.cleanStockToken(t).toUpperCase() !== target);
+      tokens.push(target);
+      child.allowedSymbols = tokens.join(', ');
+    }
+
+    this.childStockSearchQuery[child.id] = '';
+    this.childStockDropdownOpen[child.id] = false;
+    this.saveChildAllowedSymbols(child);
+  }
+
+  public blockStockForChild(child: any, stockNameOrSymbol: string) {
+    const target = this.cleanStockToken(stockNameOrSymbol).toUpperCase();
+    if (!target) return;
+
+    let current = child.allowedSymbols ? child.allowedSymbols.trim() : 'ALL';
+    let tokens: string[] = [];
+
+    if (current === 'ALL' || !current) {
+      tokens = [`BLOCK:${target}`];
+    } else {
+      tokens = current.split(',').map((t: string) => t.trim()).filter((t: string) => t);
+      tokens = tokens.filter((t: string) => this.cleanStockToken(t).toUpperCase() !== target);
+      tokens.push(`BLOCK:${target}`);
+    }
+
+    child.allowedSymbols = tokens.join(', ');
+    this.childStockSearchQuery[child.id] = '';
+    this.childStockDropdownOpen[child.id] = false;
+    this.saveChildAllowedSymbols(child);
+  }
+
+  public removeChildSymbolRule(child: any, ruleToRemove: string) {
+    let current = child.allowedSymbols ? child.allowedSymbols.trim() : 'ALL';
+    let tokens = current.split(',').map((t: string) => t.trim()).filter((t: string) => t);
+    tokens = tokens.filter((t: string) => t.toUpperCase() !== ruleToRemove.toUpperCase());
+
+    child.allowedSymbols = tokens.length > 0 ? tokens.join(', ') : 'ALL';
+    this.saveChildAllowedSymbols(child);
+  }
+
+  public getChildParsedRules(allowedSymbols: string): { raw: string; isBlock: boolean; name: string }[] {
+    const str = (allowedSymbols || 'ALL').trim();
+    if (str === 'ALL') {
+      return [{ raw: 'ALL', isBlock: false, name: 'ALL SYMBOLS' }];
+    }
+    const tokens = str.split(',').map(t => t.trim()).filter(t => t);
+    return tokens.map(t => {
+      const isBlock = t.startsWith('!') || t.toUpperCase().startsWith('BLOCK:') || t.toUpperCase().startsWith('NOT:');
+      const name = this.cleanStockToken(t).toUpperCase();
+      return { raw: t, isBlock, name };
+    });
+  }
+
+  public openCreateClientModal() {
+    this.newClientName = '';
+    this.newClientBalance = 500000;
+    this.newClientMultiplier = 1.0;
+    this.newClientMode = 'RATIO';
+    this.newClientFixedQty = 1;
+    this.newClientAllowedSymbols = 'ALL';
+    this.showCreateClientModal = true;
+  }
+
+  public closeCreateClientModal() {
+    this.showCreateClientModal = false;
+  }
+
+  public submitCreateClient() {
+    if (!this.newClientName || !this.newClientName.trim()) {
+      this.showToastNotification('⚠️ Please enter a client name.');
+      return;
+    }
+    this.isSubmittingClient = true;
+    this.tradingService.createClient({
+      name: this.newClientName.trim(),
+      initialBalance: this.newClientBalance,
+      multiplier: this.newClientMultiplier,
+      allocationMode: this.newClientMode,
+      fixedQuantity: this.newClientFixedQty,
+      allowedSymbols: this.newClientAllowedSymbols.trim()
+    }).subscribe({
+      next: (res) => {
+        this.isSubmittingClient = false;
+        this.closeCreateClientModal();
+        this.loadAccounts();
+        this.showToastNotification(`✅ ${res?.message || 'Client created successfully!'}`);
+      },
+      error: (err) => {
+        this.isSubmittingClient = false;
+        this.showToastNotification(`❌ Failed to create client: ${err?.error?.message || err?.message || ''}`);
+      }
+    });
+  }
+
+  // History Filter Getters
+  public get filteredParentOrders(): ParentOrder[] {
+    return this.allParentOrders.filter(ord => {
+      const matchSymbol = !this.historySearchSymbol || 
+        ord.symbol.toLowerCase().includes(this.historySearchSymbol.toLowerCase().trim());
+      
+      const matchDate = !this.historyFilterDate || 
+        this.isSameDate(ord.placedAt, this.historyFilterDate);
+
+      return matchSymbol && matchDate;
+    });
+  }
+
+  public get filteredChildOrders(): ChildOrder[] {
+    return this.allChildOrders.filter(ord => {
+      const matchChild = this.historySelectedChildId === 'ALL' || 
+        ord.childAccountId === this.historySelectedChildId;
+
+      const matchSymbol = !this.historySearchSymbol || 
+        ord.symbol.toLowerCase().includes(this.historySearchSymbol.toLowerCase().trim());
+
+      const matchDate = !this.historyFilterDate || 
+        this.isSameDate(ord.replicatedAt, this.historyFilterDate);
+
+      return matchChild && matchSymbol && matchDate;
+    });
+  }
+
+  public isSameDate(dateStr: string | undefined, filterDate: string): boolean {
+    if (!dateStr || !filterDate) return false;
+    try {
+      const d = new Date(dateStr);
+      const yyyy = d.getFullYear();
+      const mm = String(d.getMonth() + 1).padStart(2, '0');
+      const dd = String(d.getDate()).padStart(2, '0');
+      const formatted = `${yyyy}-${mm}-${dd}`;
+      return formatted === filterDate;
+    } catch {
+      return false;
+    }
+  }
+
+  public clearHistoryFilters() {
+    this.historySearchSymbol = '';
+    this.historyFilterDate = '';
+    this.historySelectedChildId = 'ALL';
+  }
+
+  public setAllocationMode(child: any, mode: string) {
+    child.allocationMode = mode;
+    this.saveChildSizing(child);
+  }
+
+  public adjustMultiplier(child: any, delta: number) {
+    const current = Number(child.multiplier) || 1.0;
+    const nextVal = Math.max(0.05, Math.min(50, Math.round((current + delta) * 100) / 100));
+    child.multiplier = nextVal;
+    this.saveChildSizing(child);
+  }
+
+  public adjustFixedLots(child: any, delta: number) {
+    const current = Number(child.fixedQuantity) || 1;
+    const nextVal = Math.max(1, Math.min(500, current + delta));
+    child.fixedQuantity = nextVal;
+    this.saveChildSizing(child);
+  }
+
+  public adjustModalQuantity(delta: number) {
+    this.modalQuantity = Math.max(1, Math.min(10000, (this.modalQuantity || 1) + delta));
+  }
+
+  public setModalQuantity(qty: number) {
+    this.modalQuantity = qty;
+  }
+
+  public manualSquareOff(orderId: number) {
+    if (!confirm(`Are you sure you want to Square Off Order #${orderId} at current market price?`)) return;
+    this.tradingService.squareOffParentOrder(orderId).subscribe({
+      next: (res) => {
+        this.showToastNotification(`Order #${orderId} squared off at current market price!`);
+        this.loadOrders();
+        this.loadAccounts();
+      },
+      error: (err) => {
+        this.showToastNotification(`Failed to square off order: ${err.error?.message || err.message}`);
+      }
+    });
+  }
+
+  public manualSquareOffChild(childOrder: any) {
+    if (!childOrder || !childOrder.childOrderId) return;
+    const clientName = childOrder.childAccountName || childOrder.childAccountId;
+    if (!confirm(`Are you sure you want to execute Exit Signal for ${clientName} (${childOrder.symbol}) at current market price?`)) return;
+
+    this.tradingService.squareOffChildOrder(childOrder.childOrderId).subscribe({
+      next: (res) => {
+        this.showToastNotification(`✅ Position for ${clientName} closed! Margin and Realized PnL returned.`);
+        this.loadOrders();
+        this.loadAccounts();
+      },
+      error: (err) => {
+        this.showToastNotification(`❌ Failed to exit child order: ${err.error?.message || err.message}`);
+      }
+    });
+  }
+
+  public getOrderPnL(ord: any): { value: number; isProfit: boolean; isClosed: boolean } {
+    if (!ord) return { value: 0, isProfit: true, isClosed: true };
+    if (ord.realizedPnL !== null && ord.realizedPnL !== undefined) {
+      return {
+        value: ord.realizedPnL,
+        isProfit: ord.realizedPnL >= 0,
+        isClosed: true
+      };
+    }
+    if (ord.orderStatus === 'EXECUTED' && ord.quantity > 0) {
+      const currentPrice = this.ticksMap[ord.symbol]?.price || this.activeTick?.price || ord.price;
+      const pnl = ord.orderType === 'BUY'
+        ? (currentPrice - ord.price) * ord.quantity
+        : (ord.price - currentPrice) * ord.quantity;
+      return {
+        value: pnl,
+        isProfit: pnl >= 0,
+        isClosed: false
+      };
+    }
+    return { value: 0, isProfit: true, isClosed: true };
+  }
+
+  public showToastNotification(msg: string) {
+    this.toastMessage = msg;
+    setTimeout(() => {
+      if (this.toastMessage === msg) this.toastMessage = null;
+    }, 4000);
   }
 
   public openDbHistoryModal(tab: 'parent' | 'child' = 'parent') {
     this.dbHistoryTab = tab;
+    this.clearHistoryFilters();
     this.showDbHistoryModal = true;
     this.loadOrders();
   }
@@ -534,22 +997,30 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewInit {
   }
 
   private groupChildOrders(orders: ChildOrder[]) {
-    this.childOrdersMap = { 'C001': [], 'C002': [], 'C003': [], 'C004': [] };
-    this.childOrdersDbCount = { 'C001': 0, 'C002': 0, 'C003': 0, 'C004': 0 };
+    this.childOrdersMap = {};
+    this.childOrdersDbCount = {};
+    this.childAccounts.forEach(c => {
+      this.childOrdersMap[c.id] = [];
+      this.childOrdersDbCount[c.id] = 0;
+    });
 
     orders.forEach(ord => {
       if (this.childOrdersDbCount[ord.childAccountId] !== undefined) {
         if (!ord.orderStatus.includes('REJECTED')) {
           this.childOrdersDbCount[ord.childAccountId]++;
         }
+      } else {
+        this.childOrdersDbCount[ord.childAccountId] = ord.orderStatus.includes('REJECTED') ? 0 : 1;
       }
     });
 
     // ONLY the latest one order is displayed for each child account!
-    // Since orders from DB are sorted descending by time, the first occurrence is the latest one.
     const seen = new Set<string>();
     orders.forEach(ord => {
-      if (!seen.has(ord.childAccountId) && this.childOrdersMap[ord.childAccountId]) {
+      if (!this.childOrdersMap[ord.childAccountId]) {
+        this.childOrdersMap[ord.childAccountId] = [];
+      }
+      if (!seen.has(ord.childAccountId)) {
         this.childOrdersMap[ord.childAccountId] = [ord];
         seen.add(ord.childAccountId);
       }
@@ -1119,6 +1590,12 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewInit {
 
     this.isSubmitting = true;
     const price = this.activeTick.price;
+    const finalSl = this.modalStopLossPrice ?? (this.modalOrderType === 'BUY'
+      ? Number((price * 0.985).toFixed(2))
+      : Number((price * 1.015).toFixed(2)));
+    const finalTp = this.modalTargetPrice ?? (this.modalOrderType === 'BUY'
+      ? Number((price * 1.03).toFixed(2))
+      : Number((price * 0.97).toFixed(2)));
 
     this.tradingService.placeParentOrder(
       'P001', // Parent Account (Chandana)
@@ -1126,8 +1603,8 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewInit {
       this.modalOrderType,
       price,
       this.modalQuantity,
-      this.modalStopLossPrice,
-      this.modalTargetPrice
+      finalSl,
+      finalTp
     ).subscribe({
       next: (res) => {
         this.isSubmitting = false;

@@ -37,6 +37,7 @@ export interface AccountInfo {
   accountName: string;
   accountType: string;
   balance: number;
+  isActive?: boolean;
 }
 
 export interface ParentOrder {
@@ -50,6 +51,10 @@ export interface ParentOrder {
   targetPrice?: number | null;
   orderStatus: string;
   placedAt: string;
+  entryTime?: string;
+  exitTime?: string | null;
+  exitPrice?: number | null;
+  realizedPnL?: number | null;
 }
 
 export interface ChildOrder {
@@ -65,6 +70,22 @@ export interface ChildOrder {
   targetPrice?: number | null;
   orderStatus: string;
   replicatedAt: string;
+  entryTime?: string;
+  exitTime?: string | null;
+  exitPrice?: number | null;
+  realizedPnL?: number | null;
+}
+
+export interface AccountMapping {
+  mappingId: number;
+  parentAccountId: string;
+  childAccountId: string;
+  qtyMultiplier: number;
+  isActive: boolean;
+  allocationMode?: string;
+  fixedQuantity?: number;
+  allowedSymbols?: string;
+  childAccount?: AccountInfo;
 }
 
 export interface OrderExecutionResult {
@@ -84,6 +105,7 @@ export class TradingService {
   public ticksMap$ = new BehaviorSubject<{ [symbol: string]: StockTick }>({});
   public orderExecuted$ = new BehaviorSubject<OrderExecutionResult | null>(null);
   public accountsUpdated$ = new BehaviorSubject<AccountInfo[] | null>(null);
+  public mappingsUpdated$ = new BehaviorSubject<AccountMapping[] | null>(null);
   public isConnected$ = new BehaviorSubject<boolean>(false);
 
   constructor(private http: HttpClient) {
@@ -124,6 +146,10 @@ export class TradingService {
 
     this.hubConnection.on('AccountsUpdated', (accounts: AccountInfo[]) => {
       this.accountsUpdated$.next(accounts);
+    });
+
+    this.hubConnection.on('MappingsUpdated', (mappings: AccountMapping[]) => {
+      this.mappingsUpdated$.next(mappings);
     });
 
     this.startSignalRWithRetry();
@@ -212,5 +238,50 @@ export class TradingService {
       stopLossPrice: stopLossPrice || null,
       targetPrice: targetPrice || null
     });
+  }
+
+  public squareOffParentOrder(orderId: number): Observable<any> {
+    return this.http.post<any>(`${this.apiUrl}/orders/parent/${orderId}/square-off`, {});
+  }
+
+  public squareOffChildOrder(childOrderId: number): Observable<any> {
+    return this.http.post<any>(`${this.apiUrl}/orders/child/${childOrderId}/square-off`, {});
+  }
+
+  public getMappings(): Observable<AccountMapping[]> {
+    return this.http.get<AccountMapping[]>(`${this.apiUrl}/accounts/mappings`);
+  }
+
+  public toggleChildActive(childAccountId: string): Observable<any> {
+    return this.http.post<any>(`${this.apiUrl}/accounts/toggle-child-active`, { childAccountId });
+  }
+
+  public updateChildSizing(childAccountId: string, multiplier?: number, allocationMode?: string, fixedQuantity?: number, allowedSymbols?: string): Observable<any> {
+    return this.http.post<any>(`${this.apiUrl}/accounts/update-child-sizing`, {
+      childAccountId,
+      multiplier,
+      allocationMode,
+      fixedQuantity,
+      allowedSymbols
+    });
+  }
+
+  public createClient(clientData: {
+    name: string;
+    initialBalance?: number;
+    multiplier?: number;
+    allocationMode?: string;
+    fixedQuantity?: number;
+    allowedSymbols?: string;
+  }): Observable<any> {
+    return this.http.post<any>(`${this.apiUrl}/accounts/create-client`, clientData);
+  }
+
+  public updateAllowedSymbols(childAccountId: string, allowedSymbols: string): Observable<any> {
+    return this.http.post<any>(`${this.apiUrl}/accounts/update-allowed-symbols`, { childAccountId, allowedSymbols });
+  }
+
+  public deleteClient(childAccountId: string): Observable<any> {
+    return this.http.delete<any>(`${this.apiUrl}/accounts/delete-client/${childAccountId}`);
   }
 }

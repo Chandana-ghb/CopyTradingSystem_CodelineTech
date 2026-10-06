@@ -13,6 +13,9 @@ namespace FyersCopyTrading.Models
 
         [Column(TypeName = "decimal(18,2)")]
         public decimal Balance { get; set; } = 500000.00m;
+        
+        public bool IsActive { get; set; } = true;
+
         public DateTime CreatedAt { get; set; } = DateTime.Now;
     }
 }

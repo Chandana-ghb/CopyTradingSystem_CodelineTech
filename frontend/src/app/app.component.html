@@ -142,28 +142,27 @@
       <div class="pill-info">
         <span class="pill-role">👑 PARENT CLIENT (P001)</span>
         <span class="pill-name">Chandana</span>
-        <span class="pill-balance">₹{{ parentBalance.toLocaleString('en-IN', { minimumFractionDigits: 2,
-          maximumFractionDigits: 2 }) }}</span>
+        <span class="pill-balance">₹{{ parentBalance | number:'1.2-2' }}</span>
       </div>
       <button class="pill-add-funds-btn" (click)="openAddFundsModal('P001')" title="Add Funds to Parent Account">+ Add Funds</button>
     </div>
 
-    <!-- Unified Child Accounts Hub (Clean, Simple & Scalable) -->
+    <!-- Unified Child Accounts Pool Summary Pill -->
     <div class="account-pill child-hub-pill">
       <div class="pill-info">
         <div class="hub-role-row">
-          <span class="hub-role">👥 CHILD CLIENTS</span>
+          <span class="hub-role">👥 ALL CLIENTS POOL</span>
           <span class="hub-count-tag">{{ childAccounts.length }} Accounts</span>
           <span *ngIf="zeroFundsChildCount > 0" class="hub-alert-tag">⚠️ {{ zeroFundsChildCount }} with ₹0</span>
         </div>
         <div class="hub-bal-row">
           <span class="hub-label">Total Pool:</span>
-          <span class="hub-balance">₹{{ totalChildBalance.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) }}</span>
+          <span class="hub-balance">₹{{ totalChildBalance | number:'1.2-2' }}</span>
         </div>
       </div>
 
-      <button class="pill-add-funds-btn" (click)="openAddFundsModal('C001')" title="Add Funds to Child Client Account">
-        + Add Funds
+      <button class="pill-add-funds-btn" (click)="openAddFundsModal('ALL_CHILDREN')" title="Deposit Funds to All Child Client Accounts">
+        + Add to All
       </button>
     </div>
 
@@ -367,8 +366,14 @@
       <!-- Action Panel (Buy / Sell Buttons) -->
       <div class="action-card">
         <div class="action-header">
-          <h3>PARENT CLIENT ORDER</h3>
-          <span class="badge badge-parent">P001 - CHANDANA</span>
+          <div class="action-header-left">
+            <h3>PARENT CLIENT ORDER</h3>
+            <span class="badge badge-parent">P001 - CHANDANA</span>
+          </div>
+          <div class="parent-card-balance-box" title="Available Parent Account Balance">
+            <span class="bal-label">AVAILABLE BALANCE</span>
+            <span class="bal-amount">₹{{ parentBalance | number:'1.2-2' }}</span>
+          </div>
         </div>
 
         <div class="price-display" *ngIf="activeTick">
@@ -393,7 +398,9 @@
           <div class="preview-title">⚡ AUTO COPY REPLICATION MATRIX</div>
           <div class="preview-item" *ngFor="let child of childAccounts">
             <span class="child-name">{{ child.name }}</span>
-            <span class="child-multiplier">{{ child.multiplier }}x Qty</span>
+            <span class="child-multiplier-tag" [class.fixed-tag]="child.allocationMode === 'FIXED'">
+              {{ child.allocationMode === 'FIXED' ? ('Fixed: ' + child.fixedQuantity + ' Lots') : (child.multiplier + 'x (' + ((modalQuantity * child.multiplier).toFixed(0)) + ' Lots)') }}
+            </span>
           </div>
         </div>
       </div>
@@ -429,10 +436,13 @@
               <th>ORDER ID</th>
               <th>SYMBOL</th>
               <th>TYPE</th>
-              <th>PRICE</th>
+              <th>ENTRY PRICE</th>
               <th>QTY</th>
-              <th>TOTAL VALUE</th>
-              <th>PLACED TIME</th>
+              <th>ENTRY TIME</th>
+              <th>EXIT TIME</th>
+              <th>EXIT PRICE</th>
+              <th>PNL (₹)</th>
+              <th>ACTION</th>
             </tr>
           </thead>
           <tbody>
@@ -440,7 +450,7 @@
               <td>
                 <span [class.status-executed]="ord.orderStatus === 'EXECUTED'"
                   [class.status-rejected]="ord.orderStatus.includes('REJECTED')"
-                  [class.status-warning]="ord.orderStatus.includes('SL') || ord.orderStatus.includes('TARGET')">
+                  [class.status-warning]="ord.orderStatus.includes('SL') || ord.orderStatus.includes('TARGET') || ord.orderStatus.includes('MANUAL')">
                   {{ ord.orderStatus.includes('REJECTED') ? '✕ ' : '✓ ' }}{{ ord.orderStatus }} (LATEST)
                 </span>
               </td>
@@ -454,11 +464,27 @@
               </td>
               <td>₹{{ ord.price.toFixed(2) }}</td>
               <td><strong>{{ ord.orderStatus.includes('REJECTED') ? '0 (Not Placed)' : ord.quantity }}</strong></td>
-              <td>₹{{ ord.orderStatus.includes('REJECTED') ? '0.00' : (ord.price * ord.quantity).toFixed(2) }}</td>
-              <td>{{ ord.placedAt | date:'HH:mm:ss dd-MMM-yyyy' }}</td>
+              <td>{{ (ord.entryTime || ord.placedAt) | date:'HH:mm:ss' }}</td>
+              <td>{{ ord.exitTime ? (ord.exitTime | date:'HH:mm:ss') : '-- (Open)' }}</td>
+              <td>{{ ord.exitPrice ? ('₹' + (ord.exitPrice | number:'1.2-2')) : '-- (Open)' }}</td>
+              <td>
+                <span *ngIf="!ord.orderStatus.includes('REJECTED')" class="pnl-pill"
+                  [class.text-high]="getOrderPnL(ord).isProfit"
+                  [class.text-low]="!getOrderPnL(ord).isProfit">
+                  {{ getOrderPnL(ord).isProfit ? '+' : '' }}₹{{ getOrderPnL(ord).value.toFixed(2) }}
+                  <small>{{ getOrderPnL(ord).isClosed ? '' : ' (Live)' }}</small>
+                </span>
+                <span *ngIf="ord.orderStatus.includes('REJECTED')">--</span>
+              </td>
+              <td>
+                <button *ngIf="ord.orderStatus === 'EXECUTED'" class="btn-exit-action" (click)="manualSquareOff(ord.orderId)" title="Close position now">
+                  🚪 Exit
+                </button>
+                <span *ngIf="ord.orderStatus !== 'EXECUTED'" class="closed-label">Closed</span>
+              </td>
             </tr>
             <tr *ngIf="parentOrders.length === 0">
-              <td colspan="8" class="empty-state">No parent orders placed yet. Click Buy or Sell above!</td>
+              <td colspan="11" class="empty-state">No parent orders placed yet. Click Buy or Sell above!</td>
             </tr>
           </tbody>
         </table>
@@ -475,6 +501,10 @@
           </div>
         </div>
         <div class="header-actions">
+          <button class="btn btn-create-client" (click)="openCreateClientModal()"
+            title="Create a new client account">
+            ➕ Create Client
+          </button>
           <button class="btn btn-history" (click)="openDbHistoryModal('child')"
             title="View child order history">
             📜 View Order History
@@ -484,26 +514,168 @@
 
       <div class="child-accounts-grid">
         <div class="child-card modern-child-card" *ngFor="let child of childAccounts">
-          <!-- Card Top Bar: Client Avatar, Info, Status -->
-          <div class="child-card-top">
-            <div class="child-avatar-wrap">
-              <div class="child-avatar" [attr.data-id]="child.id">
-                {{ child.name.charAt(0) }}
-              </div>
-              <div class="child-meta-text">
-                <div class="child-name-row">
-                  <h3 class="child-title">{{ child.name }}</h3>
-                  <span class="child-id-chip">{{ child.id }}</span>
+          <!-- Card Top Bar: Client Avatar, Info & Prominent Balance Box -->
+          <div class="child-card-top-section">
+            <div class="child-header-row">
+              <div class="child-avatar-wrap">
+                <div class="child-avatar" [attr.data-id]="child.id">
+                  {{ child.name.charAt(0) }}
                 </div>
-                <div class="child-live-status">
-                  <span class="live-pulse-dot"></span>
-                  <span class="live-status-text">Active</span>
+                <div class="child-meta-text">
+                  <div class="child-name-row">
+                    <h3 class="child-title" [title]="child.name">{{ child.name }}</h3>
+                    <span class="child-id-chip">{{ child.id }}</span>
+                  </div>
+                </div>
+              </div>
+
+              <!-- High Visibility Balance Box (Never squashed or hidden) -->
+              <div class="child-balance-pill" [class.pill-zero]="child.balance <= 0" title="Available trading balance for {{ child.name }}">
+                <span class="bal-label">AVAILABLE BALANCE</span>
+                <span class="bal-amount" [class.balance-zero]="child.balance <= 0">₹{{ child.balance | number:'1.2-2' }}</span>
+              </div>
+            </div>
+
+            <!-- Card Actions Bar: ONLY ONE button to Active/Deactivate, plus Remove Client -->
+            <div class="child-card-controls-bar">
+              <button class="btn-single-status-toggle"
+                [class.btn-active]="child.isActive"
+                [class.btn-inactive]="!child.isActive"
+                (click)="toggleChildStatus(child)"
+                [disabled]="child.isUpdating"
+                title="Click to {{ child.isActive ? 'Deactivate' : 'Activate' }} {{ child.name }}">
+                <span class="toggle-icon">{{ child.isActive ? '🟢' : '⚪' }}</span>
+                <span class="toggle-label">{{ child.isActive ? 'Active' : 'Deactivated' }}</span>
+              </button>
+
+              <button class="btn-remove-client" (click)="removeClient(child)" [disabled]="child.isUpdating" title="Delete and remove this client account">
+                🗑️ Remove Client
+              </button>
+            </div>
+          </div>
+
+          <!-- Prominent High-Visibility Lot Size Sizing Control Bar -->
+          <div class="child-sizing-panel prominent-sizing-card">
+            <div class="sizing-header-row">
+              <span class="sizing-title-badge">📦 LOT SIZING ALLOCATION</span>
+              <span class="sizing-result-pill" [class.fixed-glow]="child.allocationMode === 'FIXED'">
+                <span class="pill-dot">●</span>
+                {{ child.allocationMode === 'FIXED' ? (child.fixedQuantity + ' Fixed Lots') : (child.multiplier + 'x Ratio (' + ((modalQuantity * child.multiplier).toFixed(0)) + ' Lots)') }}
+              </span>
+            </div>
+
+            <div class="sizing-controls-grid">
+              <!-- Mode Selection Segmented Toggle Buttons -->
+              <div class="sizing-mode-toggle-group">
+                <button type="button" class="btn-mode-toggle"
+                  [class.active]="child.allocationMode === 'RATIO'"
+                  (click)="setAllocationMode(child, 'RATIO')"
+                  title="Scale lots proportionally based on parent order quantity">
+                  ✕ Multiplier
+                </button>
+                <button type="button" class="btn-mode-toggle"
+                  [class.active]="child.allocationMode === 'FIXED'"
+                  (click)="setAllocationMode(child, 'FIXED')"
+                  title="Always trade fixed lot quantity regardless of parent order">
+                  🔒 Fixed Lots
+                </button>
+              </div>
+
+              <!-- Value Input with Stepper Controls -->
+              <div class="sizing-stepper-wrap">
+                <div *ngIf="child.allocationMode === 'RATIO'" class="sizing-stepper-box">
+                  <button type="button" class="stepper-btn minus" (click)="adjustMultiplier(child, -0.05)" title="Decrease multiplier">−</button>
+                  <input type="number" class="sizing-num-input-large" [(ngModel)]="child.multiplier"
+                    min="0.05" max="50" step="0.05" (change)="saveChildSizing(child)" />
+                  <button type="button" class="stepper-btn plus" (click)="adjustMultiplier(child, 0.05)" title="Increase multiplier">+</button>
+                  <span class="sizing-unit-badge">x Ratio</span>
+                </div>
+
+                <div *ngIf="child.allocationMode === 'FIXED'" class="sizing-stepper-box fixed-mode">
+                  <button type="button" class="stepper-btn minus" (click)="adjustFixedLots(child, -1)" title="Decrease fixed lots">−</button>
+                  <input type="number" class="sizing-num-input-large fixed-input" [(ngModel)]="child.fixedQuantity"
+                    min="1" max="500" step="1" (change)="saveChildSizing(child)" />
+                  <button type="button" class="stepper-btn plus" (click)="adjustFixedLots(child, 1)" title="Increase fixed lots">+</button>
+                  <span class="sizing-unit-badge fixed-unit">Lots</span>
                 </div>
               </div>
             </div>
-            <div class="child-balance-pill">
-              <span class="bal-label">BALANCE</span>
-              <span class="bal-amount" [class.balance-zero]="child.balance <= 0">₹{{ child.balance | number:'1.2-2' }}</span>
+          </div>
+
+          <!-- Symbol Selection / Whitelist & Blocklist Manager Panel -->
+          <div class="child-symbols-panel">
+            <div class="sym-header-row">
+              <span class="sym-title-badge">🎯 TRADED SYMBOLS & BLOCKLIST</span>
+              <!-- Rule Badges -->
+              <div class="sym-tags-container">
+                <span *ngIf="!child.allowedSymbols || child.allowedSymbols === 'ALL'" class="sym-active-tag sym-all">
+                  🌐 ALL SYMBOLS
+                </span>
+                <ng-container *ngIf="child.allowedSymbols && child.allowedSymbols !== 'ALL'">
+                  <span *ngFor="let rule of getChildParsedRules(child.allowedSymbols)"
+                    class="sym-rule-chip"
+                    [class.rule-block]="rule.isBlock"
+                    [class.rule-allow]="!rule.isBlock">
+                    <span>{{ rule.isBlock ? '🚫 ' + rule.name : '✓ ' + rule.name }}</span>
+                    <button type="button" class="btn-chip-remove" (click)="removeChildSymbolRule(child, rule.raw)" title="Remove rule">✕</button>
+                  </span>
+                </ng-container>
+              </div>
+            </div>
+
+            <!-- Search Stock Bar with Instant Dropdown -->
+            <div class="sym-search-dropdown-wrap">
+              <div class="sym-search-box">
+                <input type="text" class="sym-search-input"
+                  [(ngModel)]="childStockSearchQuery[child.id]"
+                  (focus)="openChildStockDropdown(child.id)"
+                  (click)="$event.stopPropagation(); openChildStockDropdown(child.id)"
+                  placeholder="🔍 Search stock to allow or block (e.g. SILVER, GOLD, TCS...)" />
+                <button *ngIf="childStockSearchQuery[child.id]" type="button" class="sym-search-clear"
+                  (click)="childStockSearchQuery[child.id] = ''">✕</button>
+              </div>
+
+              <!-- Search Results Dropdown -->
+              <div class="sym-results-dropdown animate-fade"
+                *ngIf="childStockDropdownOpen[child.id]">
+                <div class="dropdown-header">
+                  <span>{{ childStockSearchQuery[child.id] ? 'Search Results' : 'Popular Instruments' }}</span>
+                  <button type="button" class="btn-dropdown-close" (click)="childStockDropdownOpen[child.id] = false">✕</button>
+                </div>
+                <div class="dropdown-items-scroll">
+                  <div class="dropdown-stock-row" *ngFor="let s of getFilteredStocksForChild(child.id)">
+                    <div class="stock-info-col">
+                      <span class="stock-item-name">{{ s.name }}</span>
+                      <span class="stock-item-sym">{{ s.symbol }}</span>
+                    </div>
+                    <div class="stock-action-btns">
+                      <button type="button" class="btn-action-allow"
+                        (click)="allowStockForChild(child, s.name)"
+                        title="Allow only {{ s.name }} for this client">
+                        + Allow
+                      </button>
+                      <button type="button" class="btn-action-block"
+                        (click)="blockStockForChild(child, s.name)"
+                        title="Block {{ s.name }} for this client">
+                        🚫 Block
+                      </button>
+                    </div>
+                  </div>
+                  <div *ngIf="getFilteredStocksForChild(child.id).length === 0" class="dropdown-empty-state">
+                    No matching stocks found.
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Quick Presets Row -->
+            <div class="sym-controls-row">
+              <div class="sym-presets-group">
+                <button type="button" class="btn-sym-preset"
+                  [class.active]="!child.allowedSymbols || child.allowedSymbols === 'ALL'"
+                  (click)="setChildAllowedSymbolPreset(child, 'ALL')"
+                  title="Trade all symbols placed by parent">🌐 ALL (Trade All Symbols)</button>
+              </div>
             </div>
           </div>
 
@@ -516,7 +688,8 @@
             <!-- If order exists: clean structured metric box -->
             <div *ngIf="childOrdersMap[child.id] && childOrdersMap[child.id].length > 0; else noChildOrder"
               class="child-execution-box animate-fade"
-              [class.box-rejected]="childOrdersMap[child.id][0].orderStatus.includes('REJECTED')">
+              [class.box-rejected]="childOrdersMap[child.id][0].orderStatus.includes('REJECTED')"
+              [class.box-skipped]="childOrdersMap[child.id][0].orderStatus.includes('SKIPPED')">
               <div class="exec-primary-row">
                 <div class="exec-symbol-type">
                   <span class="badge" [class.badge-buy]="childOrdersMap[child.id][0].orderType === 'BUY'"
@@ -525,40 +698,69 @@
                   </span>
                   <span class="exec-symbol">{{ childOrdersMap[child.id][0].symbol }}</span>
                 </div>
-                <div class="exec-order-id">{{ childOrdersMap[child.id][0].childOrderId }}</div>
+                <div class="exec-top-right">
+                  <button *ngIf="childOrdersMap[child.id][0].orderStatus === 'EXECUTED'"
+                    type="button"
+                    class="btn-child-exit-signal"
+                    (click)="manualSquareOffChild(childOrdersMap[child.id][0])"
+                    title="Exit and square-off position for this child client at live market price">
+                    🚪 Exit Signal
+                  </button>
+                  <div class="exec-order-id">{{ childOrdersMap[child.id][0].childOrderId }}</div>
+                </div>
               </div>
 
               <div *ngIf="childOrdersMap[child.id][0].orderStatus.includes('REJECTED')" class="rejected-alert-banner">
                 ⚠️ ORDER NOT PLACED: Insufficient funds in this child account. ₹0 deducted.
               </div>
 
+              <div *ngIf="childOrdersMap[child.id][0].orderStatus.includes('SYMBOL BLOCKED')" class="skipped-alert-banner symbol-blocked">
+                🚫 ORDER BLOCKED: This stock is in the client's blocked list ({{ child.allowedSymbols }}). ₹0 deducted.
+              </div>
+
+              <div *ngIf="childOrdersMap[child.id][0].orderStatus.includes('SYMBOL NOT ALLOWED')" class="skipped-alert-banner symbol-skipped">
+                🎯 ORDER SKIPPED: Symbol not in client's allowed list ({{ child.allowedSymbols || 'ALL' }}). ₹0 deducted.
+              </div>
+
+              <div *ngIf="childOrdersMap[child.id][0].orderStatus.includes('SKIPPED') && !childOrdersMap[child.id][0].orderStatus.includes('SYMBOL')" class="skipped-alert-banner">
+                ℹ️ ORDER SKIPPED: This child account is currently Deactivated.
+              </div>
+
               <div class="exec-metrics-grid">
                 <div class="metric-item">
-                  <span class="m-label">EXEC PRICE</span>
+                  <span class="m-label">ENTRY PRICE</span>
                   <span class="m-val">₹{{ childOrdersMap[child.id][0].price.toFixed(2) }}</span>
                 </div>
                 <div class="metric-item">
                   <span class="m-label">REPLICATED QTY</span>
-                  <span class="m-val qty-highlight" [class.text-low]="childOrdersMap[child.id][0].orderStatus.includes('REJECTED')">
-                    {{ childOrdersMap[child.id][0].orderStatus.includes('REJECTED') ? '0 Shares (Not Placed)' : childOrdersMap[child.id][0].quantity + ' Shares' }}
+                  <span class="m-val qty-highlight" [class.text-low]="childOrdersMap[child.id][0].orderStatus.includes('REJECTED') || childOrdersMap[child.id][0].orderStatus.includes('SKIPPED')">
+                    {{ (childOrdersMap[child.id][0].orderStatus.includes('REJECTED') || childOrdersMap[child.id][0].orderStatus.includes('SKIPPED')) ? '0 Shares' : childOrdersMap[child.id][0].quantity + ' Shares' }}
                   </span>
                 </div>
                 <div class="metric-item">
-                  <span class="m-label">TOTAL VALUE</span>
-                  <span class="m-val" [class.text-low]="childOrdersMap[child.id][0].orderStatus.includes('REJECTED')">
-                    ₹{{ childOrdersMap[child.id][0].orderStatus.includes('REJECTED') ? '0.00' : (childOrdersMap[child.id][0].price * childOrdersMap[child.id][0].quantity).toFixed(2) }}
-                  </span>
+                  <span class="m-label">ENTRY TIME</span>
+                  <span class="m-val time-val">{{ (childOrdersMap[child.id][0].entryTime || childOrdersMap[child.id][0].replicatedAt) | date:'HH:mm:ss' }}</span>
                 </div>
                 <div class="metric-item">
-                  <span class="m-label">REPLICATED TIME</span>
-                  <span class="m-val time-val">{{ childOrdersMap[child.id][0].replicatedAt | date:'HH:mm:ss' }}</span>
+                  <span class="m-label">EXIT TIME</span>
+                  <span class="m-val time-val">{{ childOrdersMap[child.id][0].exitTime ? (childOrdersMap[child.id][0].exitTime | date:'HH:mm:ss') : '-- (Open)' }}</span>
+                </div>
+                <div class="metric-item">
+                  <span class="m-label">EXIT PRICE</span>
+                  <span class="m-val">{{ childOrdersMap[child.id][0].exitPrice ? ('₹' + (childOrdersMap[child.id][0].exitPrice | number:'1.2-2')) : '-- (Open)' }}</span>
+                </div>
+                <div class="metric-item" [class.text-high]="getOrderPnL(childOrdersMap[child.id][0]).isProfit" [class.text-low]="!getOrderPnL(childOrdersMap[child.id][0]).isProfit">
+                  <span class="m-label">PNL (₹)</span>
+                  <span class="m-val pnl-val">
+                    {{ getOrderPnL(childOrdersMap[child.id][0]).isProfit ? '+' : '' }}₹{{ getOrderPnL(childOrdersMap[child.id][0]).value.toFixed(2) }}
+                  </span>
                 </div>
               </div>
 
               <div class="exec-status-footer">
                 <span [class.exec-badge-success]="childOrdersMap[child.id][0].orderStatus === 'EXECUTED'"
                   [class.exec-badge-danger]="childOrdersMap[child.id][0].orderStatus.includes('REJECTED')"
-                  [class.exec-badge-warning]="childOrdersMap[child.id][0].orderStatus.includes('SL') || childOrdersMap[child.id][0].orderStatus.includes('SKIPPED')">
+                  [class.exec-badge-warning]="childOrdersMap[child.id][0].orderStatus.includes('SL') || childOrdersMap[child.id][0].orderStatus.includes('TARGET') || childOrdersMap[child.id][0].orderStatus.includes('SKIPPED') || childOrdersMap[child.id][0].orderStatus.includes('MANUAL')">
                   {{ childOrdersMap[child.id][0].orderStatus.includes('REJECTED') ? '✕ ' : '✓ ' }}{{
                   childOrdersMap[child.id][0].orderStatus }}
                 </span>
@@ -606,28 +808,64 @@
             <span class="label">Market Price:</span>
             <span class="val price-val">₹{{ activeTick?.price?.toFixed(2) }}</span>
           </div>
+          <div class="summary-row">
+            <span class="label">Parent Balance:</span>
+            <span class="val font-bold text-high">₹{{ parentBalance | number:'1.2-2' }}</span>
+          </div>
         </div>
 
-        <div class="form-group">
-          <label for="modalQtyInput" class="form-label">Parent Order Quantity:</label>
-          <input id="modalQtyInput" type="number" class="form-input" [(ngModel)]="modalQuantity" min="1" max="10000" />
+        <!-- Parent Order Quantity / Lot Size Selection with Steppers & Quick Preset Buttons -->
+        <div class="form-group prominent-qty-group">
+          <div class="qty-label-row">
+            <label for="modalQtyInput" class="form-label qty-title">Parent Order Quantity (Lots):</label>
+            <span class="qty-current-badge">{{ modalQuantity }} Lots Selected</span>
+          </div>
+
+          <div class="qty-stepper-container">
+            <button type="button" class="qty-step-btn" (click)="adjustModalQuantity(-1)">−</button>
+            <input id="modalQtyInput" type="number" class="form-input qty-main-input" [(ngModel)]="modalQuantity" min="1" max="10000" />
+            <button type="button" class="qty-step-btn" (click)="adjustModalQuantity(1)">+</button>
+          </div>
+
+          <!-- Quick Lot Presets -->
+          <div class="qty-presets-row">
+            <button type="button" class="btn-qty-preset" [class.active]="modalQuantity === 1" (click)="setModalQuantity(1)">1 Lot</button>
+            <button type="button" class="btn-qty-preset" [class.active]="modalQuantity === 5" (click)="setModalQuantity(5)">5 Lots</button>
+            <button type="button" class="btn-qty-preset" [class.active]="modalQuantity === 10" (click)="setModalQuantity(10)">10 Lots</button>
+            <button type="button" class="btn-qty-preset" [class.active]="modalQuantity === 25" (click)="setModalQuantity(25)">25 Lots</button>
+            <button type="button" class="btn-qty-preset" [class.active]="modalQuantity === 50" (click)="setModalQuantity(50)">50 Lots</button>
+            <button type="button" class="btn-qty-preset" [class.active]="modalQuantity === 100" (click)="setModalQuantity(100)">100 Lots</button>
+          </div>
+
+          <!-- Live Child Copy Distribution Breakdown -->
+          <div class="modal-replication-preview">
+            <span class="preview-header-tag">👥 Auto Child Accounts Replication Matrix:</span>
+            <div class="preview-child-chips">
+              <div *ngFor="let c of childAccounts" class="child-chip" [class.chip-inactive]="!c.isActive">
+                <span class="c-chip-name">{{ c.name }}:</span>
+                <span class="c-chip-lots">
+                  {{ !c.isActive ? '0 (Deactivated)' : (c.allocationMode === 'FIXED' ? (c.fixedQuantity + ' Lots [Fixed]') : ((modalQuantity * c.multiplier).toFixed(0) + ' Lots [' + c.multiplier + 'x]')) }}
+                </span>
+              </div>
+            </div>
+          </div>
         </div>
 
         <!-- Stop Loss & Target Price Inputs (Risk Management) -->
         <div class="form-row-grid">
           <div class="form-group">
-            <label class="form-label">Stop-Loss Price (Optional):</label>
+            <label class="form-label">Stop-Loss Price:</label>
             <input type="number" class="form-input" [(ngModel)]="modalStopLossPrice"
               placeholder="e.g. {{ modalOrderType === 'BUY' ? ((activeTick?.price || 0) * 0.985).toFixed(2) : ((activeTick?.price || 0) * 1.015).toFixed(2) }}"
-              step="0.05" />
+              step="0.05" required />
             <span class="field-hint">Auto-exits if market reaches SL</span>
           </div>
 
           <div class="form-group">
-            <label class="form-label">Target / Take-Profit (Optional):</label>
+            <label class="form-label">Target Price (Take-Profit):</label>
             <input type="number" class="form-input" [(ngModel)]="modalTargetPrice"
               placeholder="e.g. {{ modalOrderType === 'BUY' ? ((activeTick?.price || 0) * 1.03).toFixed(2) : ((activeTick?.price || 0) * 0.97).toFixed(2) }}"
-              step="0.05" />
+              step="0.05" required />
             <span class="field-hint">Auto-exits if market reaches Target</span>
           </div>
         </div>
@@ -637,6 +875,12 @@
           <div class="margin-row">
             <span class="m-label">Estimated Order Value:</span>
             <span class="m-val font-bold">₹{{ ((activeTick?.price || 0) * modalQuantity).toFixed(2) }}</span>
+          </div>
+          <div class="margin-row">
+            <span class="m-label">Available Parent Balance:</span>
+            <span class="m-val font-bold" [class.text-low]="parentBalance < ((activeTick?.price || 0) * modalQuantity)">
+              ₹{{ parentBalance | number:'1.2-2' }}
+            </span>
           </div>
         </div>
       </div>
@@ -669,6 +913,40 @@
         <button class="modal-close" (click)="closeDbHistoryModal()">✕</button>
       </div>
 
+      <!-- Universal History Filters Bar (Symbol, Date, Child Selector) -->
+      <div class="history-filter-bar">
+        <div class="filter-item filter-symbol">
+          <label class="filter-label">🔍 Search Symbol:</label>
+          <input type="text" class="history-filter-input" [(ngModel)]="historySearchSymbol"
+            placeholder="e.g. TCS, GOLD..." />
+        </div>
+
+        <div class="filter-item filter-date">
+          <label class="filter-label">📅 Filter Date:</label>
+          <input type="date" class="history-filter-date" [(ngModel)]="historyFilterDate" />
+        </div>
+
+        <div class="filter-item filter-child" *ngIf="dbHistoryTab === 'child'">
+          <label class="filter-label">👤 Child Client:</label>
+          <select class="history-child-select" [(ngModel)]="historySelectedChildId">
+            <option value="ALL">👥 All Child Clients ({{ childAccounts.length }})</option>
+            <option *ngFor="let c of childAccounts" [value]="c.id">
+              {{ c.name }} ({{ c.id }})
+            </option>
+          </select>
+        </div>
+
+        <div class="filter-item filter-reset" *ngIf="historySearchSymbol || historyFilterDate || (dbHistoryTab === 'child' && historySelectedChildId !== 'ALL')">
+          <button class="btn-clear-filter" (click)="clearHistoryFilters()" title="Reset search filters">
+            ✕ Clear
+          </button>
+        </div>
+
+        <div class="filter-summary-tag">
+          {{ dbHistoryTab === 'parent' ? filteredParentOrders.length : filteredChildOrders.length }} orders found
+        </div>
+      </div>
+
       <!-- Parent Orders DB History Table (Shown ONLY when Parent button is clicked) -->
       <div class="modal-body history-body" *ngIf="dbHistoryTab === 'parent'">
         <div class="table-container history-table-scroll">
@@ -679,15 +957,17 @@
                 <th>ACCOUNT</th>
                 <th>SYMBOL</th>
                 <th>TYPE</th>
-                <th>PRICE</th>
+                <th>ENTRY PRICE</th>
                 <th>QTY</th>
-                <th>TOTAL VALUE</th>
+                <th>ENTRY TIME</th>
+                <th>EXIT TIME</th>
+                <th>EXIT PRICE</th>
+                <th>PNL (₹)</th>
                 <th>STATUS</th>
-                <th>PLACED TIME (IST)</th>
               </tr>
             </thead>
             <tbody>
-              <tr *ngFor="let ord of allParentOrders; let i = index">
+              <tr *ngFor="let ord of filteredParentOrders; let i = index">
                 <td>
                   <strong>{{ ord.orderId }}</strong>
                   <span *ngIf="i === 0" class="badge-mini-latest">LATEST</span>
@@ -702,18 +982,28 @@
                 </td>
                 <td>₹{{ ord.price.toFixed(2) }}</td>
                 <td><strong>{{ ord.quantity }}</strong></td>
-                <td>₹{{ (ord.price * ord.quantity).toFixed(2) }}</td>
+                <td>{{ (ord.entryTime || ord.placedAt) | date:'HH:mm:ss' }}</td>
+                <td>{{ ord.exitTime ? (ord.exitTime | date:'HH:mm:ss') : '--' }}</td>
+                <td>{{ ord.exitPrice ? ('₹' + (ord.exitPrice | number:'1.2-2')) : '--' }}</td>
+                <td>
+                  <span *ngIf="ord.realizedPnL !== null && ord.realizedPnL !== undefined"
+                    class="pnl-pill"
+                    [class.text-high]="ord.realizedPnL >= 0"
+                    [class.text-low]="ord.realizedPnL < 0">
+                    {{ ord.realizedPnL >= 0 ? '+' : '' }}₹{{ ord.realizedPnL.toFixed(2) }}
+                  </span>
+                  <span *ngIf="ord.realizedPnL === null || ord.realizedPnL === undefined">--</span>
+                </td>
                 <td>
                   <span [class.status-executed]="ord.orderStatus === 'EXECUTED'"
                     [class.status-rejected]="ord.orderStatus.includes('REJECTED')"
-                    [class.status-warning]="ord.orderStatus.includes('SL') || ord.orderStatus.includes('TARGET')">
+                    [class.status-warning]="ord.orderStatus.includes('SL') || ord.orderStatus.includes('TARGET') || ord.orderStatus.includes('MANUAL')">
                     {{ ord.orderStatus.includes('REJECTED') ? '✕ ' : '✓ ' }}{{ ord.orderStatus }}
                   </span>
                 </td>
-                <td>{{ ord.placedAt | date:'dd-MMM-yyyy HH:mm:ss' }}</td>
               </tr>
-              <tr *ngIf="allParentOrders.length === 0">
-                <td colspan="9" class="empty-state">No parent orders saved in database yet.</td>
+              <tr *ngIf="filteredParentOrders.length === 0">
+                <td colspan="11" class="empty-state">No parent orders match the search criteria.</td>
               </tr>
             </tbody>
           </table>
@@ -731,14 +1021,17 @@
                 <th>CHILD CLIENT</th>
                 <th>SYMBOL</th>
                 <th>TYPE</th>
-                <th>PRICE</th>
+                <th>ENTRY PRICE</th>
                 <th>QTY</th>
+                <th>ENTRY TIME</th>
+                <th>EXIT TIME</th>
+                <th>EXIT PRICE</th>
+                <th>PNL (₹)</th>
                 <th>STATUS</th>
-                <th>REPLICATED TIME (IST)</th>
               </tr>
             </thead>
             <tbody>
-              <tr *ngFor="let ord of allChildOrders; let i = index">
+              <tr *ngFor="let ord of filteredChildOrders; let i = index">
                 <td>
                   <strong>{{ ord.childOrderId }}</strong>
                   <span *ngIf="i === 0" class="badge-mini-latest">LATEST</span>
@@ -754,17 +1047,28 @@
                 </td>
                 <td>₹{{ ord.price.toFixed(2) }}</td>
                 <td><strong class="qty-highlight">{{ ord.quantity }}</strong></td>
+                <td>{{ (ord.entryTime || ord.replicatedAt) | date:'HH:mm:ss' }}</td>
+                <td>{{ ord.exitTime ? (ord.exitTime | date:'HH:mm:ss') : '--' }}</td>
+                <td>{{ ord.exitPrice ? ('₹' + (ord.exitPrice | number:'1.2-2')) : '--' }}</td>
+                <td>
+                  <span *ngIf="ord.realizedPnL !== null && ord.realizedPnL !== undefined"
+                    class="pnl-pill"
+                    [class.text-high]="ord.realizedPnL >= 0"
+                    [class.text-low]="ord.realizedPnL < 0">
+                    {{ ord.realizedPnL >= 0 ? '+' : '' }}₹{{ ord.realizedPnL.toFixed(2) }}
+                  </span>
+                  <span *ngIf="ord.realizedPnL === null || ord.realizedPnL === undefined">--</span>
+                </td>
                 <td>
                   <span [class.status-executed]="ord.orderStatus === 'EXECUTED'"
                     [class.status-rejected]="ord.orderStatus.includes('REJECTED')"
-                    [class.status-warning]="ord.orderStatus.includes('SL') || ord.orderStatus.includes('TARGET') || ord.orderStatus.includes('SKIPPED')">
+                    [class.status-warning]="ord.orderStatus.includes('SL') || ord.orderStatus.includes('TARGET') || ord.orderStatus.includes('SKIPPED') || ord.orderStatus.includes('MANUAL')">
                     {{ ord.orderStatus.includes('REJECTED') ? '✕ ' : '✓ ' }}{{ ord.orderStatus }}
                   </span>
                 </td>
-                <td>{{ ord.replicatedAt | date:'dd-MMM-yyyy HH:mm:ss' }}</td>
               </tr>
-              <tr *ngIf="allChildOrders.length === 0">
-                <td colspan="9" class="empty-state">No child orders saved in database yet.</td>
+              <tr *ngIf="filteredChildOrders.length === 0">
+                <td colspan="12" class="empty-state">No child orders match the search criteria.</td>
               </tr>
             </tbody>
           </table>
@@ -772,8 +1076,81 @@
       </div>
 
       <div class="modal-footer history-footer">
-        <span class="db-footer-note">✓ All past orders are preserved in system history. Only the latest order is displayed on the main page.</span>
+        <span class="db-footer-note">✓ All past orders are preserved in system history with entry/exit timestamps and realized PnL.</span>
         <button class="btn-cancel" (click)="closeDbHistoryModal()">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Create New Client Modal Popup -->
+  <div class="modal-overlay" *ngIf="showCreateClientModal" (click)="closeCreateClientModal()">
+    <div class="modal-card create-client-modal animate-fade" (click)="$event.stopPropagation()">
+      <div class="modal-header header-client">
+        <div>
+          <h3>➕ CREATE NEW CLIENT ACCOUNT</h3>
+          <p class="subtitle">Add a new child trading account to copy parent trades</p>
+        </div>
+        <button class="modal-close" (click)="closeCreateClientModal()">✕</button>
+      </div>
+
+      <div class="modal-body">
+        <div class="form-group">
+          <label class="form-label">Client Name / Full Name:</label>
+          <input type="text" class="form-input" [(ngModel)]="newClientName" placeholder="e.g. Vikram or Priya" />
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Initial Balance (₹):</label>
+          <input type="number" class="form-input" [(ngModel)]="newClientBalance" min="0" step="50000" />
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Lot Sizing Allocation Mode:</label>
+          <div class="sizing-mode-toggle-group full-width">
+            <button type="button" class="btn-mode-toggle"
+              [class.active]="newClientMode === 'RATIO'"
+              (click)="newClientMode = 'RATIO'">
+              ✕ Multiplier (Ratio)
+            </button>
+            <button type="button" class="btn-mode-toggle"
+              [class.active]="newClientMode === 'FIXED'"
+              (click)="newClientMode = 'FIXED'">
+              🔒 Fixed Lots
+            </button>
+          </div>
+        </div>
+
+        <div class="form-group" *ngIf="newClientMode === 'RATIO'">
+          <label class="form-label">Multiplier Ratio:</label>
+          <input type="number" class="form-input" [(ngModel)]="newClientMultiplier" min="0.05" max="50" step="0.05" />
+          <small class="form-hint">E.g. 0.5x means if parent places 10 lots, this client copies 5 lots.</small>
+        </div>
+
+        <div class="form-group" *ngIf="newClientMode === 'FIXED'">
+          <label class="form-label">Fixed Lots Quantity:</label>
+          <input type="number" class="form-input" [(ngModel)]="newClientFixedQty" min="1" max="500" step="1" />
+          <small class="form-hint">Always trades exactly this lot quantity regardless of parent order size.</small>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Allowed Traded Symbols (Whitelist):</label>
+          <div class="sym-presets-group mb-2">
+            <button type="button" class="btn-sym-preset" [class.active]="newClientAllowedSymbols === 'ALL'" (click)="newClientAllowedSymbols = 'ALL'">ALL</button>
+            <button type="button" class="btn-sym-preset" [class.active]="newClientAllowedSymbols === 'TCS'" (click)="newClientAllowedSymbols = 'TCS'">Only TCS</button>
+            <button type="button" class="btn-sym-preset" [class.active]="newClientAllowedSymbols === 'GOLD'" (click)="newClientAllowedSymbols = 'GOLD'">Only GOLD</button>
+            <button type="button" class="btn-sym-preset" [class.active]="newClientAllowedSymbols === 'TCS, GOLD'" (click)="newClientAllowedSymbols = 'TCS, GOLD'">TCS + GOLD</button>
+          </div>
+          <input type="text" class="form-input" [(ngModel)]="newClientAllowedSymbols" placeholder="e.g. TCS or GOLD or ALL" />
+          <small class="form-hint">If client only wants TCS, enter TCS. Orders for other symbols will be automatically skipped.</small>
+        </div>
+      </div>
+
+      <div class="modal-footer">
+        <button class="btn-cancel" (click)="closeCreateClientModal()">Cancel</button>
+        <button class="btn-confirm btn-create" [disabled]="isSubmittingClient || !newClientName.trim()"
+          (click)="submitCreateClient()">
+          {{ isSubmittingClient ? 'CREATING CLIENT...' : '✓ CREATE CLIENT' }}
+        </button>
       </div>
     </div>
   </div>
@@ -834,6 +1211,13 @@
           {{ isSubmittingFunds ? 'DEPOSITING...' : 'DEPOSIT ₹' + fundDepositAmount.toLocaleString('en-IN') }}
         </button>
       </div>
+    </div>
+  </div>
+
+  <!-- Floating Toast Notification -->
+  <div *ngIf="toastMessage" class="toast-floating-container animate-fade">
+    <div class="toast-floating-content">
+      {{ toastMessage }}
     </div>
   </div>
 </div>

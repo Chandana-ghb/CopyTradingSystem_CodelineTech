@@ -43,15 +43,57 @@ using (var scope = app.Services.CreateScope())
     var db = scope.ServiceProvider.GetRequiredService<CopyTradingDbContext>();
     db.Database.EnsureCreated();
 
+    try
+    {
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('ParentOrders') AND name = 'EntryTime')
+                ALTER TABLE ParentOrders ADD EntryTime DATETIME2 NOT NULL DEFAULT GETDATE();
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('ParentOrders') AND name = 'ExitTime')
+                ALTER TABLE ParentOrders ADD ExitTime DATETIME2 NULL;
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('ParentOrders') AND name = 'ExitPrice')
+                ALTER TABLE ParentOrders ADD ExitPrice DECIMAL(18,2) NULL;
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('ParentOrders') AND name = 'RealizedPnL')
+                ALTER TABLE ParentOrders ADD RealizedPnL DECIMAL(18,2) NULL;
+
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('ChildOrders') AND name = 'EntryTime')
+                ALTER TABLE ChildOrders ADD EntryTime DATETIME2 NOT NULL DEFAULT GETDATE();
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('ChildOrders') AND name = 'ExitTime')
+                ALTER TABLE ChildOrders ADD ExitTime DATETIME2 NULL;
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('ChildOrders') AND name = 'ExitPrice')
+                ALTER TABLE ChildOrders ADD ExitPrice DECIMAL(18,2) NULL;
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('ChildOrders') AND name = 'RealizedPnL')
+                ALTER TABLE ChildOrders ADD RealizedPnL DECIMAL(18,2) NULL;
+
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('Accounts') AND name = 'IsActive')
+                ALTER TABLE Accounts ADD IsActive BIT NOT NULL DEFAULT 1;
+
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('AccountMappings') AND name = 'IsActive')
+                ALTER TABLE AccountMappings ADD IsActive BIT NOT NULL DEFAULT 1;
+
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('AccountMappings') AND name = 'AllocationMode')
+                ALTER TABLE AccountMappings ADD AllocationMode NVARCHAR(20) NOT NULL DEFAULT 'RATIO';
+
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('AccountMappings') AND name = 'FixedQuantity')
+                ALTER TABLE AccountMappings ADD FixedQuantity INT NOT NULL DEFAULT 1;
+
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('AccountMappings') AND name = 'QtyMultiplier')
+                ALTER TABLE AccountMappings ADD QtyMultiplier DECIMAL(5,2) NOT NULL DEFAULT 1.0;
+
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('AccountMappings') AND name = 'AllowedSymbols')
+                ALTER TABLE AccountMappings ADD AllowedSymbols NVARCHAR(500) NOT NULL DEFAULT 'ALL';
+        ");
+    }
+    catch { }
+
     var accounts = db.Accounts.ToList();
     if (!accounts.Any())
     {
         db.Accounts.AddRange(
-            new FyersCopyTrading.Models.Account { AccountId = "P001", AccountName = "Chandana (Parent)", AccountType = "PARENT", Balance = 1000000.00m },
-            new FyersCopyTrading.Models.Account { AccountId = "C001", AccountName = "Ramu (Child 1)", AccountType = "CHILD", Balance = 500000.00m },
-            new FyersCopyTrading.Models.Account { AccountId = "C002", AccountName = "Seenu (Child 2)", AccountType = "CHILD", Balance = 500000.00m },
-            new FyersCopyTrading.Models.Account { AccountId = "C003", AccountName = "Priya (Child 3)", AccountType = "CHILD", Balance = 500000.00m },
-            new FyersCopyTrading.Models.Account { AccountId = "C004", AccountName = "Arjun (Child 4)", AccountType = "CHILD", Balance = 500000.00m }
+            new FyersCopyTrading.Models.Account { AccountId = "P001", AccountName = "Chandana (Parent)", AccountType = "PARENT", Balance = 1000000.00m, IsActive = true },
+            new FyersCopyTrading.Models.Account { AccountId = "C001", AccountName = "Ramu (Child 1)", AccountType = "CHILD", Balance = 500000.00m, IsActive = true },
+            new FyersCopyTrading.Models.Account { AccountId = "C002", AccountName = "Seenu (Child 2)", AccountType = "CHILD", Balance = 500000.00m, IsActive = true },
+            new FyersCopyTrading.Models.Account { AccountId = "C003", AccountName = "Priya (Child 3)", AccountType = "CHILD", Balance = 500000.00m, IsActive = true },
+            new FyersCopyTrading.Models.Account { AccountId = "C004", AccountName = "Arjun (Child 4)", AccountType = "CHILD", Balance = 500000.00m, IsActive = true }
         );
         db.SaveChanges();
     }
@@ -63,6 +105,35 @@ using (var scope = app.Services.CreateScope())
         }
         db.SaveChanges();
     }
+
+    // Ensure AccountMappings exist in Database so account status is permanently stored and restored
+    var existingMappings = db.AccountMappings.ToList();
+    var defaultChildConfigs = new[]
+    {
+        new { Id = "C001", Multiplier = 0.1m, Mode = "RATIO", FixedQty = 1 },
+        new { Id = "C002", Multiplier = 0.5m, Mode = "RATIO", FixedQty = 5 },
+        new { Id = "C003", Multiplier = 1.0m, Mode = "RATIO", FixedQty = 10 },
+        new { Id = "C004", Multiplier = 1.0m, Mode = "RATIO", FixedQty = 10 }
+    };
+
+    foreach (var cfg in defaultChildConfigs)
+    {
+        var existing = existingMappings.FirstOrDefault(m => m.ChildAccountId == cfg.Id);
+        if (existing == null)
+        {
+            db.AccountMappings.Add(new FyersCopyTrading.Models.AccountMapping
+            {
+                ParentAccountId = "P001",
+                ChildAccountId = cfg.Id,
+                QtyMultiplier = cfg.Multiplier,
+                IsActive = true,
+                AllocationMode = cfg.Mode,
+                FixedQuantity = cfg.FixedQty,
+                AllowedSymbols = "ALL"
+            });
+        }
+    }
+    db.SaveChanges();
 }
 
 if (app.Environment.IsDevelopment())

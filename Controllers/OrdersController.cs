@@ -57,6 +57,24 @@ namespace FyersCopyTrading.Controllers
             return Ok(orders);
         }
 
+        // POST api/orders/parent/{orderId}/square-off (Manual Square Off / Exit Position)
+        [HttpPost("parent/{orderId}/square-off")]
+        public async Task<IActionResult> SquareOffOrder(int orderId)
+        {
+            var result = await _copyTradingService.ManualSquareOffOrderAsync(orderId);
+            if (result == null) return NotFound(new { message = $"Order #{orderId} not found or already closed." });
+            return Ok(result);
+        }
+
+        // POST api/orders/child/{childOrderId}/square-off (Individual Child Manual Exit Signal)
+        [HttpPost("child/{childOrderId}/square-off")]
+        public async Task<IActionResult> SquareOffChildOrder(int childOrderId)
+        {
+            var result = await _copyTradingService.ManualSquareOffChildOrderAsync(childOrderId);
+            if (result == null) return NotFound(new { message = $"Child Order #{childOrderId} not found or already closed." });
+            return Ok(result);
+        }
+
         // GET api/orders/child (Get All Child Orders across accounts)
         [HttpGet("child")]
         public async Task<IActionResult> GetChildOrders([FromQuery] string? childAccountId)

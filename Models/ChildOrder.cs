@@ -25,5 +25,15 @@ namespace FyersCopyTrading.Models
 
         public string OrderStatus { get; set; } = "EXECUTED";
         public DateTime ReplicatedAt { get; set; } = DateTime.Now;
+
+        // Entry & Automated Exit Tracking
+        public DateTime EntryTime { get; set; } = DateTime.Now;
+        public DateTime? ExitTime { get; set; }
+
+        [Column(TypeName = "decimal(18,2)")]
+        public decimal? ExitPrice { get; set; }
+
+        [Column(TypeName = "decimal(18,2)")]
+        public decimal? RealizedPnL { get; set; }
     }
 }

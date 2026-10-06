@@ -77,7 +77,7 @@ namespace FyersCopyTrading.Services
             _db.ParentOrders.Add(parentOrder);
             await _db.SaveChangesAsync();
 
-            if (!isParentInsufficientFunds && (stopLossPrice.HasValue || targetPrice.HasValue))
+            if (stopLossPrice.HasValue || targetPrice.HasValue)
             {
                 ActiveSymbolsForSlTarget[symbol] = true;
             }
@@ -103,53 +103,27 @@ namespace FyersCopyTrading.Services
                     .ToListAsync();
             }
 
-            // If Parent Order was Rejected due to lack of funds, reject child replications with ₹0 deducted
-            if (isParentInsufficientFunds)
-            {
-                var rejectedChildOrders = new List<ChildOrder>();
-                foreach (var map in mappings)
-                {
-                    var childAcc = map.ChildAccount ?? await _db.Accounts.FindAsync(map.ChildAccountId);
-                    var childOrder = new ChildOrder
-                    {
-                        ParentOrderId = parentOrder.OrderId,
-                        ChildAccountId = map.ChildAccountId,
-                        ChildAccountName = childAcc?.AccountName ?? map.ChildAccountId,
-                        Symbol = symbol,
-                        OrderType = pOrderType,
-                        Price = price,
-                        Quantity = 0,
-                        StopLossPrice = stopLossPrice,
-                        TargetPrice = targetPrice,
-                        OrderStatus = "REJECTED (PARENT ORDER REJECTED)",
-                        ReplicatedAt = DateTime.Now
-                    };
-                    _db.ChildOrders.Add(childOrder);
-                    rejectedChildOrders.Add(childOrder);
-                }
-                await _db.SaveChangesAsync();
-
-                var accountsList = await _db.Accounts.ToListAsync();
-                await _hubContext.Clients.All.SendAsync("AccountsUpdated", accountsList);
-                await _hubContext.Clients.All.SendAsync("OrderExecuted", new ParentOrderResult
-                {
-                    ParentOrder = parentOrder,
-                    ChildOrders = rejectedChildOrders
-                });
-
-                return new ParentOrderResult
-                {
-                    ParentOrder = parentOrder,
-                    ChildOrders = rejectedChildOrders
-                };
-            }
+            // If Parent Order was Rejected due to lack of funds, we DO NOT reject children who have sufficient funds.
+            // Execution proceeds to replicate and execute orders for any child account that has enough balance.
 
             // 3. Replicate Orders for Each Child Account with Business Scenarios
             var replicatedChildOrders = new List<ChildOrder>();
             foreach (var map in mappings)
             {
                 var childAcc = map.ChildAccount ?? await _db.Accounts.FindAsync(map.ChildAccountId);
-                int childQty = (int)Math.Max(1, Math.Round(parentQty * (map.QtyMultiplier > 0 ? map.QtyMultiplier : 1.0m)));
+                
+                // Calculate Child Quantity based on Allocation Mode (Fixed Lots vs Ratio Multiplier)
+                int childQty;
+                if (map.AllocationMode == "FIXED")
+                {
+                    childQty = map.FixedQuantity > 0 ? map.FixedQuantity : 1;
+                }
+                else
+                {
+                    decimal mult = map.QtyMultiplier > 0 ? map.QtyMultiplier : 1.0m;
+                    childQty = (int)Math.Max(1, Math.Round(parentQty * mult));
+                }
+
                 decimal childCost = price * childQty;
 
                 var childOrder = new ChildOrder
@@ -163,21 +137,30 @@ namespace FyersCopyTrading.Services
                     Quantity = childQty,
                     StopLossPrice = stopLossPrice,
                     TargetPrice = targetPrice,
-                    ReplicatedAt = DateTime.Now
+                    ReplicatedAt = DateTime.Now,
+                    EntryTime = DateTime.Now
                 };
 
-                // SCENARIO 2: Inactive Child Account Check
+                // SCENARIO: Deactivated Child Account Check
                 if (!map.IsActive)
                 {
+                    childOrder.Quantity = 0;
                     childOrder.OrderStatus = "SKIPPED (INACTIVE)";
-                    _logger.LogInformation($"[CHILD SKIPPED] Account {map.ChildAccountId} is marked inactive.");
+                    _logger.LogInformation($"[CHILD SKIPPED] Account {map.ChildAccountId} is marked deactivated. Order not placed.");
                 }
-                // SCENARIO 3: Insufficient Funds in Child Account Check
+                // SCENARIO: Symbol Whitelist & Blacklist Preference Check (e.g. only SILVER, or block GOLD)
+                var symbolCheck = CheckSymbolAllowed(map.AllowedSymbols, symbol);
+                if (!symbolCheck.IsAllowed)
+                {
+                    childOrder.Quantity = 0;
+                    childOrder.OrderStatus = symbolCheck.Reason;
+                    _logger.LogInformation($"[CHILD SKIPPED] Account {map.ChildAccountId} rule triggered for symbol {symbol} ({symbolCheck.Reason}). Filter: '{map.AllowedSymbols}'. Order not placed.");
+                }
+                // SCENARIO: Insufficient Funds in Child Account Check
                 else if (pOrderType == "BUY" && childAcc != null && childAcc.Balance < childCost)
                 {
                     childOrder.OrderStatus = "REJECTED (INSUFFICIENT FUNDS)";
                     _logger.LogWarning($"[CHILD REJECTED] {map.ChildAccountId} insufficient funds. Required: ₹{childCost:N2}, Available: ₹{childAcc.Balance:N2}. Child order not placed.");
-                    // DO NOT DEDUCT BALANCE FOR THIS CHILD
                 }
                 // SUCCESSFUL REPLICATION
                 else
@@ -252,9 +235,16 @@ namespace FyersCopyTrading.Services
                     if (slHit || targetHit)
                     {
                         string triggerReason = slHit ? "CLOSED (SL HIT)" : "CLOSED (TARGET HIT)";
-                        parentOrder.OrderStatus = triggerReason;
+                        DateTime exitTime = DateTime.Now;
 
-                        // Credit closing value back to parent
+                        parentOrder.OrderStatus = triggerReason;
+                        parentOrder.ExitTime = exitTime;
+                        parentOrder.ExitPrice = currentPrice;
+                        parentOrder.RealizedPnL = parentOrder.OrderType == "BUY"
+                            ? (currentPrice - parentOrder.Price) * parentOrder.Quantity
+                            : (parentOrder.Price - currentPrice) * parentOrder.Quantity;
+
+                        // Credit position settlement back to parent
                         var parentAcc = await _db.Accounts.FindAsync(parentOrder.ParentAccountId);
                         if (parentAcc != null)
                         {
@@ -269,6 +259,12 @@ namespace FyersCopyTrading.Services
                         foreach (var cOrder in childOrders)
                         {
                             cOrder.OrderStatus = triggerReason;
+                            cOrder.ExitTime = exitTime;
+                            cOrder.ExitPrice = currentPrice;
+                            cOrder.RealizedPnL = cOrder.OrderType == "BUY"
+                                ? (currentPrice - cOrder.Price) * cOrder.Quantity
+                                : (cOrder.Price - currentPrice) * cOrder.Quantity;
+
                             var cAcc = await _db.Accounts.FindAsync(cOrder.ChildAccountId);
                             if (cAcc != null)
                             {
@@ -296,6 +292,115 @@ namespace FyersCopyTrading.Services
             }
         }
 
+        // Manual square-off: exit parent position and all child positions immediately at current price
+        public async Task<ParentOrderResult?> ManualSquareOffOrderAsync(int parentOrderId, decimal? exitPriceOverride = null)
+        {
+            var parentOrder = await _db.ParentOrders.FindAsync(parentOrderId);
+            if (parentOrder == null || parentOrder.OrderStatus != "EXECUTED") return null;
+
+            decimal exitPrice = exitPriceOverride ?? parentOrder.Price;
+            if (MockTickService.Stocks.TryGetValue(parentOrder.Symbol, out var tick) && tick.Price > 0)
+            {
+                exitPrice = tick.Price;
+            }
+
+            var exitTime = DateTime.Now;
+            string triggerReason = "CLOSED (MANUAL EXIT)";
+
+            parentOrder.OrderStatus = triggerReason;
+            parentOrder.ExitTime = exitTime;
+            parentOrder.ExitPrice = exitPrice;
+            parentOrder.RealizedPnL = parentOrder.OrderType == "BUY"
+                ? (exitPrice - parentOrder.Price) * parentOrder.Quantity
+                : (parentOrder.Price - exitPrice) * parentOrder.Quantity;
+
+            var parentAcc = await _db.Accounts.FindAsync(parentOrder.ParentAccountId);
+            if (parentAcc != null)
+            {
+                parentAcc.Balance += exitPrice * parentOrder.Quantity;
+            }
+
+            var childOrders = await _db.ChildOrders
+                .Where(c => c.ParentOrderId == parentOrder.OrderId && c.OrderStatus == "EXECUTED")
+                .ToListAsync();
+
+            foreach (var cOrder in childOrders)
+            {
+                cOrder.OrderStatus = triggerReason;
+                cOrder.ExitTime = exitTime;
+                cOrder.ExitPrice = exitPrice;
+                cOrder.RealizedPnL = cOrder.OrderType == "BUY"
+                    ? (exitPrice - cOrder.Price) * cOrder.Quantity
+                    : (cOrder.Price - exitPrice) * cOrder.Quantity;
+
+                var cAcc = await _db.Accounts.FindAsync(cOrder.ChildAccountId);
+                if (cAcc != null)
+                {
+                    cAcc.Balance += exitPrice * cOrder.Quantity;
+                }
+            }
+
+            await _db.SaveChangesAsync();
+
+            var result = new ParentOrderResult
+            {
+                ParentOrder = parentOrder,
+                ChildOrders = childOrders
+            };
+
+            await _hubContext.Clients.All.SendAsync("OrderExecuted", result);
+            await BroadcastAccountBalancesAsync();
+
+            return result;
+        }
+
+        // Manual square-off for a SINGLE child account order (Child Exit Signal)
+        public async Task<ChildOrder?> ManualSquareOffChildOrderAsync(int childOrderId, decimal? exitPriceOverride = null)
+        {
+            var childOrder = await _db.ChildOrders.FindAsync(childOrderId);
+            if (childOrder == null || childOrder.OrderStatus != "EXECUTED") return null;
+
+            decimal exitPrice = exitPriceOverride ?? childOrder.Price;
+            if (MockTickService.Stocks.TryGetValue(childOrder.Symbol, out var tick) && tick.Price > 0)
+            {
+                exitPrice = tick.Price;
+            }
+
+            var exitTime = DateTime.Now;
+            string triggerReason = "CLOSED (MANUAL EXIT)";
+
+            childOrder.OrderStatus = triggerReason;
+            childOrder.ExitTime = exitTime;
+            childOrder.ExitPrice = exitPrice;
+            childOrder.RealizedPnL = childOrder.OrderType == "BUY"
+                ? (exitPrice - childOrder.Price) * childOrder.Quantity
+                : (childOrder.Price - exitPrice) * childOrder.Quantity;
+
+            var childAcc = await _db.Accounts.FindAsync(childOrder.ChildAccountId);
+            if (childAcc != null)
+            {
+                childAcc.Balance += exitPrice * childOrder.Quantity;
+            }
+
+            await _db.SaveChangesAsync();
+
+            _logger.LogInformation($"[CHILD MANUAL EXIT] ChildOrder #{childOrder.ChildOrderId} ({childOrder.ChildAccountId}) exited at ₹{exitPrice:N2}, Realized PnL: ₹{childOrder.RealizedPnL:N2}");
+
+            var parentOrder = await _db.ParentOrders.FindAsync(childOrder.ParentOrderId);
+            if (parentOrder != null)
+            {
+                await _hubContext.Clients.All.SendAsync("OrderExecuted", new ParentOrderResult
+                {
+                    ParentOrder = parentOrder,
+                    ChildOrders = new List<ChildOrder> { childOrder }
+                });
+            }
+
+            await BroadcastAccountBalancesAsync();
+
+            return childOrder;
+        }
+
         public async Task BroadcastAccountBalancesAsync()
         {
             try
@@ -304,6 +409,79 @@ namespace FyersCopyTrading.Services
                 await _hubContext.Clients.All.SendAsync("AccountsUpdated", accounts);
             }
             catch { }
+        }
+
+        private static (bool IsAllowed, string Reason) CheckSymbolAllowed(string? allowedSymbols, string currentSymbol)
+        {
+            if (string.IsNullOrWhiteSpace(allowedSymbols) || allowedSymbols.Trim().Equals("ALL", StringComparison.OrdinalIgnoreCase))
+            {
+                return (true, "OK");
+            }
+
+            var cleanCurrent = currentSymbol
+                .Replace("NSE:", "", StringComparison.OrdinalIgnoreCase)
+                .Replace("MCX:", "", StringComparison.OrdinalIgnoreCase)
+                .Replace("-EQ", "", StringComparison.OrdinalIgnoreCase)
+                .Trim();
+
+            var tokens = allowedSymbols.Split(new[] { ',', ';', '|' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+            // 1. Check if explicitly BLOCKED first (e.g. "!GOLD", "BLOCK:GOLD", "NOT:GOLD")
+            foreach (var token in tokens)
+            {
+                var trimmed = token.Trim();
+                if (trimmed.StartsWith("!", StringComparison.OrdinalIgnoreCase) ||
+                    trimmed.StartsWith("BLOCK:", StringComparison.OrdinalIgnoreCase) ||
+                    trimmed.StartsWith("NOT:", StringComparison.OrdinalIgnoreCase))
+                {
+                    var blockedSymbol = trimmed.TrimStart('!')
+                        .Replace("BLOCK:", "", StringComparison.OrdinalIgnoreCase)
+                        .Replace("NOT:", "", StringComparison.OrdinalIgnoreCase)
+                        .Replace("NSE:", "", StringComparison.OrdinalIgnoreCase)
+                        .Replace("MCX:", "", StringComparison.OrdinalIgnoreCase)
+                        .Replace("-EQ", "", StringComparison.OrdinalIgnoreCase)
+                        .Trim();
+
+                    if (cleanCurrent.Equals(blockedSymbol, StringComparison.OrdinalIgnoreCase) ||
+                        currentSymbol.Contains(blockedSymbol, StringComparison.OrdinalIgnoreCase))
+                    {
+                        return (false, "SKIPPED (SYMBOL BLOCKED)");
+                    }
+                }
+            }
+
+            // 2. Filter positive allowed tokens
+            var allowTokens = tokens
+                .Where(t => !t.StartsWith("!", StringComparison.OrdinalIgnoreCase) &&
+                            !t.StartsWith("BLOCK:", StringComparison.OrdinalIgnoreCase) &&
+                            !t.StartsWith("NOT:", StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+            // If user only configured block rules (e.g. "BLOCK:GOLD"), all non-blocked symbols are allowed!
+            if (!allowTokens.Any())
+            {
+                return (true, "OK");
+            }
+
+            foreach (var token in allowTokens)
+            {
+                if (token.Equals("ALL", StringComparison.OrdinalIgnoreCase))
+                    return (true, "OK");
+
+                var cleanToken = token
+                    .Replace("NSE:", "", StringComparison.OrdinalIgnoreCase)
+                    .Replace("MCX:", "", StringComparison.OrdinalIgnoreCase)
+                    .Replace("-EQ", "", StringComparison.OrdinalIgnoreCase)
+                    .Trim();
+
+                if (cleanCurrent.Equals(cleanToken, StringComparison.OrdinalIgnoreCase) ||
+                    currentSymbol.Contains(cleanToken, StringComparison.OrdinalIgnoreCase))
+                {
+                    return (true, "OK");
+                }
+            }
+
+            return (false, "SKIPPED (SYMBOL NOT ALLOWED)");
         }
     }
 
