@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("CopyTrading")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+307b2b2cb0e10273aa5b7a3ee7e002729ab7786b")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+5ddaa227fa60ce287f5eaca0e87adb95dc9aeeb4")]
 [assembly: System.Reflection.AssemblyProductAttribute("CopyTrading")]
 [assembly: System.Reflection.AssemblyTitleAttribute("CopyTrading")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]
