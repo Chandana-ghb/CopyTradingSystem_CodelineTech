@@ -14,6 +14,13 @@ namespace FyersCopyTrading.Models
         [Column(TypeName = "decimal(18,2)")]
         public decimal Price { get; set; }
         public int Quantity { get; set; }
+
+        [Column(TypeName = "decimal(18,2)")]
+        public decimal? StopLossPrice { get; set; }
+
+        [Column(TypeName = "decimal(18,2)")]
+        public decimal? TargetPrice { get; set; }
+
         public string OrderStatus { get; set; } = "EXECUTED";
         public DateTime PlacedAt { get; set; } = DateTime.Now;
     }

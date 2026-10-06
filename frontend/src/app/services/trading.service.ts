@@ -46,6 +46,8 @@ export interface ParentOrder {
   orderType: string;
   price: number;
   quantity: number;
+  stopLossPrice?: number | null;
+  targetPrice?: number | null;
   orderStatus: string;
   placedAt: string;
 }
@@ -59,6 +61,8 @@ export interface ChildOrder {
   orderType: string;
   price: number;
   quantity: number;
+  stopLossPrice?: number | null;
+  targetPrice?: number | null;
   orderStatus: string;
   replicatedAt: string;
 }
@@ -79,6 +83,7 @@ export class TradingService {
   public liveTick$ = new BehaviorSubject<StockTick | null>(null);
   public ticksMap$ = new BehaviorSubject<{ [symbol: string]: StockTick }>({});
   public orderExecuted$ = new BehaviorSubject<OrderExecutionResult | null>(null);
+  public accountsUpdated$ = new BehaviorSubject<AccountInfo[] | null>(null);
   public isConnected$ = new BehaviorSubject<boolean>(false);
 
   constructor(private http: HttpClient) {
@@ -88,8 +93,24 @@ export class TradingService {
   private initSignalR() {
     this.hubConnection = new signalR.HubConnectionBuilder()
       .withUrl(this.hubUrl)
-      .withAutomaticReconnect()
+      .withAutomaticReconnect([0, 1000, 2000, 5000, 10000])
       .build();
+
+    this.hubConnection.onreconnecting(() => {
+      console.warn('⚠️ SignalR Reconnecting to Market Hub...');
+      this.isConnected$.next(false);
+    });
+
+    this.hubConnection.onreconnected((connectionId) => {
+      console.log('✅ SignalR Reconnected to Market Hub:', connectionId);
+      this.isConnected$.next(true);
+    });
+
+    this.hubConnection.onclose(() => {
+      console.warn('❌ SignalR Market Hub Disconnected. Re-initiating connection loop...');
+      this.isConnected$.next(false);
+      this.startSignalRWithRetry();
+    });
 
     this.hubConnection.on('ReceiveTick', (tick: StockTick) => {
       this.liveTick$.next(tick);
@@ -101,14 +122,28 @@ export class TradingService {
       this.orderExecuted$.next(result);
     });
 
+    this.hubConnection.on('AccountsUpdated', (accounts: AccountInfo[]) => {
+      this.accountsUpdated$.next(accounts);
+    });
+
+    this.startSignalRWithRetry();
+  }
+
+  private startSignalRWithRetry() {
+    if (this.hubConnection.state === signalR.HubConnectionState.Connected) {
+      this.isConnected$.next(true);
+      return;
+    }
+
     this.hubConnection.start()
       .then(() => {
         console.log('✅ SignalR Market Hub Connected');
         this.isConnected$.next(true);
       })
       .catch(err => {
-        console.warn('⚠️ SignalR Connection Error (Using REST Fallback):', err);
+        console.warn('⚠️ SignalR initial connection failed, retrying in 3s...', err);
         this.isConnected$.next(false);
+        setTimeout(() => this.startSignalRWithRetry(), 3000);
       });
   }
 
@@ -116,6 +151,11 @@ export class TradingService {
     let url = `${this.apiUrl}/stocks`;
     if (category) url += `?category=${category}`;
     return this.http.get<StockTick[]>(url);
+  }
+
+  public getStockLtp(symbol: string): Observable<any> {
+    const encoded = encodeURIComponent(symbol);
+    return this.http.get<any>(`${this.apiUrl}/stocks/ltp/${encoded}`);
   }
 
   public getChartHistory(symbol: string): Observable<any[]> {
@@ -132,6 +172,18 @@ export class TradingService {
     return this.http.get<AccountInfo[]>(`${this.apiUrl}/accounts`);
   }
 
+  public addFunds(accountId: string, amount: number): Observable<any> {
+    return this.http.post<any>(`${this.apiUrl}/accounts/add-funds`, { accountId, amount });
+  }
+
+  public setBalance(accountId: string, balance: number): Observable<any> {
+    return this.http.post<any>(`${this.apiUrl}/accounts/set-balance`, { accountId, balance });
+  }
+
+  public resetDefaultFunds(): Observable<any> {
+    return this.http.post<any>(`${this.apiUrl}/accounts/reset-default-funds`, {});
+  }
+
   public getParentOrders(): Observable<ParentOrder[]> {
     return this.http.get<ParentOrder[]>(`${this.apiUrl}/orders/parent`);
   }
@@ -142,13 +194,23 @@ export class TradingService {
     return this.http.get<ChildOrder[]>(url);
   }
 
-  public placeParentOrder(parentAccountId: string, symbol: string, orderType: string, price: number, quantity: number): Observable<OrderExecutionResult> {
+  public placeParentOrder(
+    parentAccountId: string, 
+    symbol: string, 
+    orderType: string, 
+    price: number, 
+    quantity: number,
+    stopLossPrice?: number | null,
+    targetPrice?: number | null
+  ): Observable<OrderExecutionResult> {
     return this.http.post<OrderExecutionResult>(`${this.apiUrl}/orders/parent`, {
       parentAccountId,
       symbol,
       orderType,
       price,
-      quantity
+      quantity,
+      stopLossPrice: stopLossPrice || null,
+      targetPrice: targetPrice || null
     });
   }
 }

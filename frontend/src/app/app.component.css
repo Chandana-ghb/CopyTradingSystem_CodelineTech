@@ -925,8 +925,54 @@
 
 .status-executed {
   color: var(--color-green);
-  font-weight: 600;
+  font-weight: 700;
   font-size: 12px;
+  background-color: rgba(38, 166, 154, 0.12);
+  border: 1px solid rgba(38, 166, 154, 0.3);
+  padding: 2px 7px;
+  border-radius: 4px;
+  display: inline-block;
+}
+
+.status-rejected {
+  color: #ef5350 !important;
+  font-weight: 700;
+  font-size: 12px;
+  background-color: rgba(239, 83, 80, 0.15) !important;
+  border: 1px solid rgba(239, 83, 80, 0.4) !important;
+  padding: 2px 7px;
+  border-radius: 4px;
+  display: inline-block;
+}
+
+.status-warning {
+  color: #ff9800 !important;
+  font-weight: 700;
+  font-size: 12px;
+  background-color: rgba(255, 152, 0, 0.15) !important;
+  border: 1px solid rgba(255, 152, 0, 0.4) !important;
+  padding: 2px 7px;
+  border-radius: 4px;
+  display: inline-block;
+}
+
+.child-execution-box.box-rejected {
+  border-color: rgba(239, 83, 80, 0.4) !important;
+  background: linear-gradient(180deg, rgba(239, 83, 80, 0.08) 0%, rgba(239, 83, 80, 0.02) 100%) !important;
+}
+
+.rejected-alert-banner {
+  background: rgba(239, 83, 80, 0.15);
+  border: 1px solid rgba(239, 83, 80, 0.4);
+  color: #ef5350;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 6px 10px;
+  border-radius: 6px;
+  margin-bottom: 10px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .empty-state {
@@ -1629,5 +1675,375 @@
   max-width: 70%;
   line-height: 1.4;
 }
+
+/* ==========================================================================
+   FUNDS MANAGEMENT & SCENARIOS STYLES
+   ========================================================================== */
+
+.pill-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.pill-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.pill-add-funds-btn {
+  background-color: var(--color-accent);
+  color: #ffffff;
+  border: none;
+  padding: 3px 8px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.pill-add-funds-btn:hover {
+  background-color: #1e53e5;
+  transform: scale(1.04);
+}
+
+.pill-zero-btn {
+  background-color: rgba(239, 83, 80, 0.15);
+  color: var(--color-red);
+  border: 1px solid rgba(239, 83, 80, 0.3);
+  padding: 3px 6px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.pill-zero-btn:hover {
+  background-color: var(--color-red);
+  color: #ffffff;
+}
+
+.fund-strip-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+}
+
+.strip-reset-btn {
+  background-color: var(--bg-card);
+  color: var(--text-secondary);
+  border: 1px dashed var(--border-color);
+  padding: 6px 12px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.strip-reset-btn:hover {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+  background-color: rgba(41, 98, 255, 0.05);
+}
+
+.balance-zero {
+  color: var(--color-red) !important;
+  font-weight: 800 !important;
+}
+
+/* Unified Child Clients Hub in Top Bar */
+.child-hub-pill {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  border-color: rgba(41, 98, 255, 0.4);
+  background: linear-gradient(135deg, rgba(41, 98, 255, 0.08), rgba(41, 98, 255, 0.02));
+}
+
+.hub-role-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.hub-role {
+  color: var(--color-accent);
+  font-weight: 700;
+  font-size: 11px;
+}
+
+.hub-count-tag {
+  background: rgba(41, 98, 255, 0.15);
+  color: var(--color-accent);
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 10px;
+  border: 1px solid rgba(41, 98, 255, 0.3);
+}
+
+.hub-alert-tag {
+  background: rgba(239, 83, 80, 0.15);
+  color: #ef5350;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 10px;
+  border: 1px solid rgba(239, 83, 80, 0.3);
+}
+
+.hub-bal-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.hub-label {
+  font-size: 10px;
+  color: var(--text-secondary);
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.hub-balance {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+/* Form Grid for SL & Target */
+.form-row-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.field-hint {
+  font-size: 10px;
+  color: var(--text-secondary);
+  margin-top: 3px;
+  display: block;
+}
+
+/* Margin Summary Pre-Check */
+.margin-summary-box {
+  background-color: var(--bg-main);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  padding: 10px 14px;
+  margin-bottom: 14px;
+}
+
+.margin-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  margin-bottom: 4px;
+}
+
+.margin-row:last-child {
+  margin-bottom: 0;
+}
+
+.text-danger {
+  color: var(--color-red) !important;
+  font-weight: 800;
+}
+
+.margin-alert-danger {
+  background-color: rgba(239, 83, 80, 0.12);
+  border: 1px solid rgba(239, 83, 80, 0.3);
+  color: var(--color-red);
+  font-size: 11px;
+  font-weight: 700;
+  padding: 6px 10px;
+  border-radius: 4px;
+  margin-top: 8px;
+}
+
+/* Child Breakdown Margin Check */
+.c-header-row {
+  display: flex;
+  justify-content: space-between;
+  font-weight: 600;
+  font-size: 12px;
+}
+
+.c-status-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 11px;
+  margin-top: 4px;
+}
+
+.child-insufficient {
+  border-color: rgba(239, 83, 80, 0.4) !important;
+  background-color: rgba(239, 83, 80, 0.05) !important;
+}
+
+.c-status-badge {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.badge-reject {
+  background-color: rgba(239, 83, 80, 0.2);
+  color: var(--color-red);
+}
+
+.badge-ok {
+  background-color: rgba(38, 166, 154, 0.2);
+  color: var(--color-green);
+}
+
+/* Execution Status Badges */
+.exec-badge-danger {
+  background-color: rgba(239, 83, 80, 0.15);
+  color: var(--color-red);
+  padding: 3px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 700;
+  border: 1px solid rgba(239, 83, 80, 0.3);
+}
+
+.exec-badge-warning {
+  background-color: rgba(255, 152, 0, 0.15);
+  color: #ff9800;
+  padding: 3px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 700;
+  border: 1px solid rgba(255, 152, 0, 0.3);
+}
+
+.sl-tag, .tp-tag {
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 3px;
+  margin-left: 6px;
+}
+
+.sl-tag {
+  background-color: rgba(239, 83, 80, 0.1);
+  color: var(--color-red);
+  border: 1px solid rgba(239, 83, 80, 0.2);
+}
+
+.tp-tag {
+  background-color: rgba(38, 166, 154, 0.1);
+  color: var(--color-green);
+  border: 1px solid rgba(38, 166, 154, 0.2);
+}
+
+/* Add Funds Modal */
+.funds-modal {
+  max-width: 480px;
+}
+
+.header-funds {
+  background: linear-gradient(135deg, #1e293b, #0f172a);
+  border-bottom: 2px solid var(--color-accent);
+}
+
+.header-funds h3 {
+  color: #ffffff;
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.fund-presets {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+  margin-top: 8px;
+  margin-bottom: 16px;
+}
+
+.preset-btn {
+  background-color: var(--bg-main);
+  border: 1px solid var(--border-color);
+  color: var(--text-primary);
+  padding: 6px 4px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.preset-btn:hover {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+  background-color: rgba(41, 98, 255, 0.08);
+}
+
+.scenario-helper-box {
+  background-color: rgba(41, 98, 255, 0.04);
+  border: 1px dashed rgba(41, 98, 255, 0.3);
+  border-radius: 6px;
+  padding: 12px;
+  margin-top: 14px;
+}
+
+.helper-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--color-accent);
+  margin-bottom: 4px;
+}
+
+.helper-desc {
+  font-size: 11px;
+  color: var(--text-secondary);
+  margin-bottom: 10px;
+  line-height: 1.3;
+}
+
+.scenario-buttons-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.btn-scenario-pill {
+  background-color: var(--bg-card);
+  border: 1px solid var(--border-color);
+  color: var(--text-primary);
+  padding: 6px 10px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  text-align: left;
+  transition: all 0.2s ease;
+}
+
+.btn-scenario-pill:hover {
+  border-color: #ff9800;
+  color: #ff9800;
+  background-color: rgba(255, 152, 0, 0.06);
+}
+
+.btn-scenario-pill.reset:hover {
+  border-color: var(--color-green);
+  color: var(--color-green);
+  background-color: rgba(38, 166, 154, 0.06);
+}
+
+.btn-deposit {
+  background-color: var(--color-accent) !important;
+  color: #ffffff !important;
+}
+
 
 

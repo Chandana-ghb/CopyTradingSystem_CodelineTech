@@ -101,17 +101,39 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewInit {
   public showOrderModal = false;
   public modalOrderType: 'BUY' | 'SELL' = 'BUY';
   public modalQuantity = 10;
+  public modalStopLossPrice: number | null = null;
+  public modalTargetPrice: number | null = null;
   public isSubmitting = false;
   public toastMessage: string | null = null;
+
+  // Add Funds Modal
+  public showAddFundsModal = false;
+  public fundTargetAccountId = 'P001';
+  public fundDepositAmount = 50000;
+  public isSubmittingFunds = false;
 
   // Accounts & Balances
   public parentBalance = 1000000;
   public childAccounts = [
-    { id: 'C001', name: 'Ramu (Child 1)', multiplier: 1.0, balance: 500000 },
-    { id: 'C002', name: 'Seenu (Child 2)', multiplier: 1.0, balance: 500000 },
-    { id: 'C003', name: 'Priya (Child 3)', multiplier: 1.0, balance: 500000 },
-    { id: 'C004', name: 'Arjun (Child 4)', multiplier: 1.0, balance: 500000 }
+    { id: 'C001', name: 'Ramu', multiplier: 1.0, balance: 500000 },
+    { id: 'C002', name: 'Seenu', multiplier: 1.0, balance: 500000 },
+    { id: 'C003', name: 'Priya', multiplier: 1.0, balance: 500000 },
+    { id: 'C004', name: 'Arjun', multiplier: 1.0, balance: 500000 }
   ];
+
+  public cleanAccountName(name: string): string {
+    if (!name) return '';
+    return name.replace(/\s*\(Child\s*\d+\)/gi, '').replace(/\s*\(Parent\)/gi, '').trim();
+  }
+
+  // Child Accounts Aggregation
+  public get totalChildBalance(): number {
+    return this.childAccounts.reduce((sum, c) => sum + (c.balance || 0), 0);
+  }
+
+  public get zeroFundsChildCount(): number {
+    return this.childAccounts.filter(c => c.balance <= 0).length;
+  }
 
   // Order Tables
   public parentOrders: ParentOrder[] = []; // Only the latest single order is displayed in parent client account
@@ -207,6 +229,23 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewInit {
         if (!result) return;
         this.handleNewOrderExecuted(result);
         this.loadAccounts();
+      })
+    );
+
+    // 5. Listen to Real-time SignalR Account Balance Updates
+    this.subscriptions.add(
+      this.tradingService.accountsUpdated$.subscribe(accs => {
+        if (!accs) return;
+        const parent = accs.find(a => a.accountId === 'P001');
+        if (parent) {
+          this.parentBalance = parent.balance;
+        }
+        this.childAccounts.forEach(ca => {
+          const matching = accs.find(a => a.accountId === ca.id);
+          if (matching) {
+            ca.balance = matching.balance;
+          }
+        });
       })
     );
   }
@@ -460,6 +499,9 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewInit {
         const matching = accs.find(a => a.accountId === ca.id);
         if (matching) {
           ca.balance = matching.balance;
+          if (matching.accountName) {
+            ca.name = this.cleanAccountName(matching.accountName);
+          }
         }
       });
     });
@@ -478,14 +520,15 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewInit {
   private loadOrders() {
     this.tradingService.getParentOrders().subscribe(data => {
       this.allParentOrders = data || [];
-      this.totalParentOrdersCount = this.allParentOrders.length;
+      this.totalParentOrdersCount = this.allParentOrders.filter(o => !o.orderStatus.includes('REJECTED')).length;
       // ONLY the latest one order is displayed in parent client account
       this.parentOrders = this.allParentOrders.length > 0 ? [this.allParentOrders[0]] : [];
     });
 
     this.tradingService.getChildOrders().subscribe(data => {
       this.allChildOrders = data || [];
-      this.totalChildOrdersCount = this.allChildOrders.length;
+      // Only count non-rejected orders (e.g. 55 instead of 56 when 1 is rejected)
+      this.totalChildOrdersCount = this.allChildOrders.filter(o => !o.orderStatus.includes('REJECTED')).length;
       this.groupChildOrders(this.allChildOrders);
     });
   }
@@ -496,7 +539,9 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewInit {
 
     orders.forEach(ord => {
       if (this.childOrdersDbCount[ord.childAccountId] !== undefined) {
-        this.childOrdersDbCount[ord.childAccountId]++;
+        if (!ord.orderStatus.includes('REJECTED')) {
+          this.childOrdersDbCount[ord.childAccountId]++;
+        }
       }
     });
 
@@ -574,6 +619,9 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewInit {
         timeVisible: true,
         secondsVisible: this.isSecondsTimeframe,
         borderColor: this.isDarkMode ? '#2a2e39' : '#e2e8f0',
+        barSpacing: 9,
+        minBarSpacing: 3,
+        rightOffset: 6,
         tickMarkFormatter: (time: number) => {
           const d = new Date(time * 1000);
           const istOffsetMs = 5.5 * 3600000;
@@ -725,11 +773,10 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewInit {
     if (!this.candlestickSeries || !this.raw1MinBars || this.raw1MinBars.length === 0) return;
 
     const aggregated = this.aggregateBars(this.raw1MinBars, this.selectedTimeframe);
-    const displayBars = aggregated.length > 300 ? aggregated.slice(-300) : aggregated;
-    this.candlestickSeries.setData(displayBars as any);
+    this.candlestickSeries.setData(aggregated as any);
 
-    if (displayBars.length > 0) {
-      const last = displayBars[displayBars.length - 1];
+    if (aggregated.length > 0) {
+      const last = aggregated[aggregated.length - 1];
       this.timeframeLiveBar = {
         time: last.time,
         open: last.open,
@@ -737,8 +784,15 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewInit {
         low: last.low,
         close: last.close
       };
+
+      const count = aggregated.length;
+      const visibleBars = Math.min(count, 80);
+      this.chart.timeScale().setVisibleLogicalRange({
+        from: Math.max(0, count - visibleBars),
+        to: count + 4
+      });
     }
-    this.chart.timeScale().fitContent();
+    this.chart.timeScale().scrollToRealTime();
   }
 
   private loadChartHistory(symbol: string) {
@@ -769,12 +823,8 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewInit {
           }
         }
 
-        // Filter bars strictly for today's market session (09:15 IST onwards for NSE, 09:00 IST onwards for MCX)
-        const openEpoch = this.getTodayMarketOpenEpoch(symbol);
-        const todayBars = uniqueBars.filter(b => b.time >= openEpoch);
-
-        // Strictly today's live session bars! Zero fallback to old historical days!
-        this.raw1MinBars = todayBars;
+        // Load all candles from Data folder files to chart view
+        this.raw1MinBars = uniqueBars;
 
         if (this.raw1MinBars.length > 0) {
           const last = this.raw1MinBars[this.raw1MinBars.length - 1];
@@ -799,15 +849,13 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewInit {
     this.candlePage = 1;
     this.tradingService.getHistoricalCandles(symbol).subscribe({
       next: (data) => {
-        const openEpoch = this.getTodayMarketOpenEpoch(symbol);
-        const todayCandles = (data || []).filter(c => c.timestamp >= openEpoch);
-        this.historicalCandles = todayCandles;
+        this.historicalCandles = data || [];
         this.isLoadingCandles = false;
 
-        // Sync LTP with the latest candle from today's session only if not already receiving live prices
-        if (todayCandles.length > 0) {
+        // Sync LTP with the latest candle from historical data if not already receiving live prices
+        if (this.historicalCandles.length > 0) {
           if (this.raw1MinBars.length === 0) {
-            this.raw1MinBars = todayCandles.map(c => ({
+            this.raw1MinBars = this.historicalCandles.map(c => ({
               time: c.timestamp,
               open: c.open,
               high: c.high,
@@ -817,8 +865,8 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewInit {
             this.renderChartForTimeframe();
           }
 
-          const latestCandle = todayCandles[todayCandles.length - 1];
-          const prevCandle = todayCandles.length > 1 ? todayCandles[todayCandles.length - 2] : latestCandle;
+          const latestCandle = this.historicalCandles[this.historicalCandles.length - 1];
+          const prevCandle = this.historicalCandles.length > 1 ? this.historicalCandles[this.historicalCandles.length - 2] : latestCandle;
 
           if (this.activeTick && (!this.activeTick.price || this.activeTick.price === 0)) {
             this.activeTick.price = latestCandle.close;
@@ -894,11 +942,6 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewInit {
       ? tick.candleTime 
       : Math.floor(Date.now() / 60000) * 60;
 
-    const openEpoch = this.getTodayMarketOpenEpoch(tick.symbol);
-    if (candleTime < openEpoch) {
-      return;
-    }
-
     // Ensure strictly non-decreasing time for TradingView
     if (this.currentLiveBar && candleTime < this.currentLiveBar.time) {
       candleTime = this.currentLiveBar.time;
@@ -910,6 +953,26 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewInit {
     const candleClose = tick.candleClose && tick.candleClose > 0 ? tick.candleClose : tick.price;
 
     if (!this.currentLiveBar || this.currentLiveBar.time !== candleTime) {
+      // If one or more intermediate minutes were skipped during live market, fill with flat continuity so 0 gaps exist
+      if (this.currentLiveBar && candleTime > this.currentLiveBar.time + 60) {
+        let fillTime = this.currentLiveBar.time + 60;
+        const prevClose = this.currentLiveBar.close;
+        while (fillTime < candleTime) {
+          const gapBar = {
+            time: fillTime,
+            open: prevClose,
+            high: prevClose,
+            low: prevClose,
+            close: prevClose
+          };
+          this.raw1MinBars.push(gapBar);
+          if (this.selectedTimeframe === '1m' && this.candlestickSeries) {
+            try { this.candlestickSeries.update(gapBar as any); } catch {}
+          }
+          fillTime += 60;
+        }
+      }
+
       // New 1-minute candle starts
       this.currentLiveBar = {
         time: candleTime,
@@ -1036,6 +1099,14 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewInit {
   // Modal Actions
   public openModal(type: 'BUY' | 'SELL') {
     this.modalOrderType = type;
+    const currentPrice = this.activeTick?.price || 0;
+    if (type === 'BUY') {
+      this.modalStopLossPrice = currentPrice > 0 ? Number((currentPrice * 0.985).toFixed(2)) : null; // 1.5% below LTP
+      this.modalTargetPrice = currentPrice > 0 ? Number((currentPrice * 1.03).toFixed(2)) : null;   // 3% above LTP
+    } else {
+      this.modalStopLossPrice = currentPrice > 0 ? Number((currentPrice * 1.015).toFixed(2)) : null;
+      this.modalTargetPrice = currentPrice > 0 ? Number((currentPrice * 0.97).toFixed(2)) : null;
+    }
     this.showOrderModal = true;
   }
 
@@ -1054,7 +1125,9 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewInit {
       this.selectedSymbol,
       this.modalOrderType,
       price,
-      this.modalQuantity
+      this.modalQuantity,
+      this.modalStopLossPrice,
+      this.modalTargetPrice
     ).subscribe({
       next: (res) => {
         this.isSubmitting = false;
@@ -1062,12 +1135,87 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewInit {
         this.loadAccounts(); // Updates parent and child balances
         this.handleNewOrderExecuted(res); // Replaces previous displayed order with new latest order
         this.loadOrders();   // Refreshes orders from DB to ensure persistence sync
-        this.showToast(`✅ ${this.modalOrderType} Order #${res.parentOrder.orderId} Placed! Display updated with latest order & stored in database.`);
+
+        // Check for insufficient funds in parent or children
+        if (res.parentOrder.orderStatus.includes('REJECTED')) {
+          this.showToast(`⚠️ Order Not Placed: Parent Account has insufficient funds! ₹0 deducted.`);
+        } else {
+          const rejectedChildren = res.childOrders.filter(c => c.orderStatus.includes('INSUFFICIENT'));
+          if (rejectedChildren.length > 0) {
+            const names = rejectedChildren.map(c => this.cleanAccountName(c.childAccountName)).join(', ');
+            this.showToast(`⚠️ Order Placed! Notice: ${names} skipped due to INSUFFICIENT FUNDS.`);
+          } else {
+            this.showToast(`✅ ${this.modalOrderType} Order ${res.parentOrder.orderId} Placed & Replicated to all Child Accounts!`);
+          }
+        }
       },
       error: (err) => {
         this.isSubmitting = false;
         console.error('Order error:', err);
-        this.showToast(`❌ Failed to place order`);
+        const msg = err?.error?.message || err?.message || 'Failed to place order';
+        this.showToast(`❌ ${msg}`);
+      }
+    });
+  }
+
+  // Add Funds Actions
+  public openAddFundsModal(accountId: string = 'P001') {
+    this.fundTargetAccountId = accountId;
+    this.fundDepositAmount = 50000;
+    this.showAddFundsModal = true;
+  }
+
+  public closeAddFundsModal() {
+    this.showAddFundsModal = false;
+  }
+
+  public setFundPreset(amt: number) {
+    this.fundDepositAmount = amt;
+  }
+
+  public submitAddFunds() {
+    if (this.fundDepositAmount <= 0 || this.isSubmittingFunds) return;
+    this.isSubmittingFunds = true;
+
+    this.tradingService.addFunds(this.fundTargetAccountId, this.fundDepositAmount).subscribe({
+      next: (res) => {
+        this.isSubmittingFunds = false;
+        this.closeAddFundsModal();
+        this.loadAccounts();
+        this.showToast(`✅ ${res?.message || 'Funds added successfully!'}`);
+      },
+      error: (err) => {
+        this.isSubmittingFunds = false;
+        this.showToast(`❌ Failed to add funds: ${err?.error?.message || 'Unknown error'}`);
+      }
+    });
+  }
+
+  public resetAllFunds() {
+    if (this.isSubmittingFunds) return;
+    this.isSubmittingFunds = true;
+    this.tradingService.resetDefaultFunds().subscribe({
+      next: () => {
+        this.isSubmittingFunds = false;
+        this.loadAccounts();
+        this.showToast(`✅ All accounts reset to default funds!`);
+      },
+      error: (err) => {
+        this.isSubmittingFunds = false;
+        this.showToast(`❌ Failed to reset funds`);
+      }
+    });
+  }
+
+  // Quick scenario test helper: Set a child account to ₹0 balance
+  public setChildZeroFunds(childId: string = 'C002') {
+    this.tradingService.setBalance(childId, 0).subscribe({
+      next: () => {
+        this.loadAccounts();
+        this.showToast(`⚠️ Scenario Set: ${childId} balance is now ₹0 (Insufficient Funds).`);
+      },
+      error: (err) => {
+        this.showToast(`❌ Failed to set balance: ${err?.error?.message || ''}`);
       }
     });
   }
@@ -1082,7 +1230,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewInit {
     const pExists = this.allParentOrders.some(o => o.orderId === res.parentOrder.orderId);
     if (!pExists) {
       this.allParentOrders = [res.parentOrder, ...this.allParentOrders];
-      this.totalParentOrdersCount = this.allParentOrders.length;
+      this.totalParentOrdersCount = this.allParentOrders.filter(o => !o.orderStatus.includes('REJECTED')).length;
     }
 
     // Display ONLY latest single order in each Child Client Account (replaces previous displayed order)
@@ -1090,7 +1238,9 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewInit {
       res.childOrders.forEach(co => {
         if (this.childOrdersMap[co.childAccountId]) {
           this.childOrdersMap[co.childAccountId] = [co]; // Replaced by previous order!
-          this.childOrdersDbCount[co.childAccountId] = (this.childOrdersDbCount[co.childAccountId] || 0) + 1;
+          if (!co.orderStatus.includes('REJECTED')) {
+            this.childOrdersDbCount[co.childAccountId] = (this.childOrdersDbCount[co.childAccountId] || 0) + 1;
+          }
         }
 
         const cExists = this.allChildOrders.some(o => o.childOrderId === co.childOrderId);
@@ -1098,7 +1248,8 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewInit {
           this.allChildOrders = [co, ...this.allChildOrders];
         }
       });
-      this.totalChildOrdersCount = this.allChildOrders.length;
+      // Only count non-rejected orders (e.g. 55 instead of 56 when 1 order is rejected)
+      this.totalChildOrdersCount = this.allChildOrders.filter(o => !o.orderStatus.includes('REJECTED')).length;
     }
   }
 

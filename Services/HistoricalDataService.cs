@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Net.Http;
 using System.Text.Json;
@@ -168,7 +169,8 @@ namespace FyersCopyTrading.Services
                             decimal low = arr[3].GetDecimal();
                             decimal close = arr[4].GetDecimal();
                             long vol = arr[5].GetInt64();
-                            lines.Add($"{ts},{open},{high},{low},{close},{vol}");
+                            var dtIst = DateTimeOffset.FromUnixTimeSeconds(ts).ToOffset(TimeSpan.FromHours(5.5));
+                            lines.Add($"{dtIst:yyyy-MM-dd HH:mm:ss},{open.ToString(CultureInfo.InvariantCulture)},{high.ToString(CultureInfo.InvariantCulture)},{low.ToString(CultureInfo.InvariantCulture)},{close.ToString(CultureInfo.InvariantCulture)},{vol}");
                         }
                         await File.WriteAllLinesAsync(filePath, lines);
                         _log.LogInformation($"[Fyers API] Saved {candles.GetArrayLength()} 1-min candles for {fileName} -> {filePath}");

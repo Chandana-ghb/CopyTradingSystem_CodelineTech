@@ -23,15 +23,28 @@ namespace FyersCopyTrading.Controllers
         [HttpPost("parent")]
         public async Task<IActionResult> PlaceParentOrder([FromBody] PlaceOrderRequest req)
         {
-            if (req.Quantity <= 0) return BadRequest("Quantity must be greater than 0.");
-            if (req.Price <= 0) return BadRequest("Price must be greater than 0.");
+            if (req.Quantity <= 0) return BadRequest(new { message = "Quantity must be greater than 0." });
+            if (req.Price <= 0) return BadRequest(new { message = "Price must be greater than 0." });
 
             var parentAccountId = string.IsNullOrEmpty(req.ParentAccountId) ? "P001" : req.ParentAccountId;
 
-            var result = await _copyTradingService.PlaceParentOrderAsync(
-                parentAccountId, req.Symbol, req.OrderType, req.Price, req.Quantity);
+            try
+            {
+                var result = await _copyTradingService.PlaceParentOrderAsync(
+                    parentAccountId, 
+                    req.Symbol, 
+                    req.OrderType, 
+                    req.Price, 
+                    req.Quantity,
+                    req.StopLossPrice,
+                    req.TargetPrice);
 
-            return Ok(result);
+                return Ok(result);
+            }
+            catch (InvalidOperationException ex)
+            {
+                return BadRequest(new { message = ex.Message });
+            }
         }
 
         // GET api/orders/parent (Get All Parent Orders)
@@ -68,5 +81,7 @@ namespace FyersCopyTrading.Controllers
         public string OrderType { get; set; } = "BUY"; // BUY or SELL
         public decimal Price { get; set; }
         public int Quantity { get; set; } = 10;
+        public decimal? StopLossPrice { get; set; }
+        public decimal? TargetPrice { get; set; }
     }
 }

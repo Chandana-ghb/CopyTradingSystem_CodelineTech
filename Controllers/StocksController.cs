@@ -101,9 +101,9 @@ namespace FyersCopyTrading.Controllers
         }
 
         [HttpGet("chart-history/{symbol}")]
-        public async Task<IActionResult> GetChartHistory(string symbol, [FromQuery] int limit = 500)
+        public async Task<IActionResult> GetChartHistory(string symbol, [FromQuery] int limit = 0)
         {
-            var candles = await ReadHistoricalCandlesAsync(symbol, limit <= 0 ? 500 : limit);
+            var candles = await ReadHistoricalCandlesAsync(symbol, limit);
             
             // Format for TradingView lightweight-charts (time, open, high, low, close)
             var chartData = candles.Select(c => new
@@ -154,6 +154,8 @@ namespace FyersCopyTrading.Controllers
             }
 
             var list = new List<HistoricalCandleDto>();
+
+            // 1. FIRST: Load all historical data available in the .txt file (preserves all previous days/history)
             if (System.IO.File.Exists(targetFile))
             {
                 var lines = System.IO.File.ReadAllLines(targetFile);
@@ -161,22 +163,43 @@ namespace FyersCopyTrading.Controllers
                 {
                     if (string.IsNullOrWhiteSpace(line)) continue;
                     var parts = line.Split(',');
-                    if (parts.Length >= 6 &&
-                        long.TryParse(parts[0], out long ts) &&
-                        decimal.TryParse(parts[1], NumberStyles.Any, CultureInfo.InvariantCulture, out decimal open) &&
-                        decimal.TryParse(parts[2], NumberStyles.Any, CultureInfo.InvariantCulture, out decimal high) &&
-                        decimal.TryParse(parts[3], NumberStyles.Any, CultureInfo.InvariantCulture, out decimal low) &&
-                        decimal.TryParse(parts[4], NumberStyles.Any, CultureInfo.InvariantCulture, out decimal close) &&
-                        long.TryParse(parts[5], out long vol))
+                    if (parts.Length >= 6)
                     {
-                        // STRICTLY ONLY CANDLES FROM TODAY'S MARKET OPEN (09:15 / 09:00 IST) ONWARDS
-                        if (ts >= todayOpenEpoch)
+                        long ts = 0;
+                        string dtStr = "";
+                        if (long.TryParse(parts[0], out long parsedTs))
                         {
+                            ts = parsedTs;
                             var dt = DateTimeOffset.FromUnixTimeSeconds(ts).ToOffset(TimeSpan.FromHours(5.5));
+                            dtStr = dt.ToString("yyyy-MM-dd HH:mm:ss");
+                        }
+                        else if (DateTime.TryParse(parts[0], CultureInfo.InvariantCulture, DateTimeStyles.None, out DateTime parsedDt))
+                        {
+                            var dto = new DateTimeOffset(parsedDt, TimeSpan.FromHours(5.5));
+                            ts = dto.ToUnixTimeSeconds();
+                            dtStr = parsedDt.ToString("yyyy-MM-dd HH:mm:ss");
+                        }
+                        else if (DateTime.TryParse(parts[0], out DateTime fallbackDt))
+                        {
+                            var dto = new DateTimeOffset(fallbackDt, TimeSpan.FromHours(5.5));
+                            ts = dto.ToUnixTimeSeconds();
+                            dtStr = fallbackDt.ToString("yyyy-MM-dd HH:mm:ss");
+                        }
+                        else
+                        {
+                            continue;
+                        }
+
+                        if (decimal.TryParse(parts[1], NumberStyles.Any, CultureInfo.InvariantCulture, out decimal open) &&
+                            decimal.TryParse(parts[2], NumberStyles.Any, CultureInfo.InvariantCulture, out decimal high) &&
+                            decimal.TryParse(parts[3], NumberStyles.Any, CultureInfo.InvariantCulture, out decimal low) &&
+                            decimal.TryParse(parts[4], NumberStyles.Any, CultureInfo.InvariantCulture, out decimal close) &&
+                            long.TryParse(parts[5], out long vol))
+                        {
                             list.Add(new HistoricalCandleDto
                             {
                                 Timestamp = ts,
-                                Datetime = dt.ToString("yyyy-MM-dd HH:mm:ss"),
+                                Datetime = dtStr,
                                 Open = open,
                                 High = high,
                                 Low = low,
@@ -186,40 +209,81 @@ namespace FyersCopyTrading.Controllers
                         }
                     }
                 }
+
+                if (limit > 0 && list.Count > limit)
+                {
+                    list = list.TakeLast(limit).ToList();
+                }
             }
 
-            // If file doesn't have today's real candles yet, fetch directly from Fyers API for today
-            if (list.Count == 0)
+            // 2. SECOND: Fetch today's live continuous candles from Fyers API and merge without overwriting past history
+            bool useLiveFyers = _config.GetValue<bool>("MarketData:UseLiveFyers", true);
+            if (useLiveFyers)
             {
                 var fetched = await FetchTodayFyersCandlesAsync(simpleName, isMcx, todayIst, todayOpenEpoch);
                 if (fetched.Count > 0)
                 {
-                    list.AddRange(fetched);
-                    try
+                    var existingMap = list.GroupBy(c => c.Timestamp).ToDictionary(g => g.Key, g => g.Last());
+                    var newCandlesToAppend = new List<HistoricalCandleDto>();
+
+                    foreach (var f in fetched)
                     {
-                        var outLines = new List<string> { "Timestamp,Open,High,Low,Close,Volume" };
-                        foreach (var c in fetched)
+                        if (existingMap.TryGetValue(f.Timestamp, out var match))
                         {
-                            outLines.Add($"{c.Timestamp},{c.Open.ToString(CultureInfo.InvariantCulture)},{c.High.ToString(CultureInfo.InvariantCulture)},{c.Low.ToString(CultureInfo.InvariantCulture)},{c.Close.ToString(CultureInfo.InvariantCulture)},{c.Volume}");
+                            match.Open = f.Open;
+                            match.High = f.High;
+                            match.Low = f.Low;
+                            match.Close = f.Close;
+                            match.Volume = f.Volume;
                         }
-                        System.IO.File.WriteAllLines(targetFile, outLines);
+                        else
+                        {
+                            list.Add(f);
+                            newCandlesToAppend.Add(f);
+                        }
                     }
-                    catch { }
+
+                    // Append any new completed candles to the .txt file so past history is NEVER lost
+                    if (newCandlesToAppend.Count > 0 && System.IO.File.Exists(targetFile))
+                    {
+                        try
+                        {
+                            var appendLines = newCandlesToAppend.Select(c =>
+                                $"{c.Datetime},{c.Open.ToString(CultureInfo.InvariantCulture)},{c.High.ToString(CultureInfo.InvariantCulture)},{c.Low.ToString(CultureInfo.InvariantCulture)},{c.Close.ToString(CultureInfo.InvariantCulture)},{c.Volume}"
+                            );
+                            System.IO.File.AppendAllLines(targetFile, appendLines);
+                        }
+                        catch { }
+                    }
+                    else if (!System.IO.File.Exists(targetFile))
+                    {
+                        try
+                        {
+                            var outLines = new List<string> { "Timestamp,Open,High,Low,Close,Volume" };
+                            foreach (var c in list)
+                            {
+                                outLines.Add($"{c.Datetime},{c.Open.ToString(CultureInfo.InvariantCulture)},{c.High.ToString(CultureInfo.InvariantCulture)},{c.Low.ToString(CultureInfo.InvariantCulture)},{c.Close.ToString(CultureInfo.InvariantCulture)},{c.Volume}");
+                            }
+                            System.IO.File.WriteAllLines(targetFile, outLines);
+                        }
+                        catch { }
+                    }
                 }
             }
 
-            // Merge in-memory active live candle from Fyers live market feed if present
+            // 3. THIRD: Merge in-memory active live forming candle from Fyers live market feed
             var activeCandle = FyersLiveMarketService.GetActiveCandle(symbol);
-            if (activeCandle != null && activeCandle.MinuteTimestamp >= todayOpenEpoch)
+            if (activeCandle != null)
             {
-                if (list.Count > 0 && list[^1].Timestamp == activeCandle.MinuteTimestamp)
+                var match = list.FirstOrDefault(c => c.Timestamp == activeCandle.MinuteTimestamp);
+                if (match != null)
                 {
-                    list[^1].High = Math.Max(list[^1].High, activeCandle.High);
-                    list[^1].Low = Math.Min(list[^1].Low, activeCandle.Low);
-                    list[^1].Close = activeCandle.Close;
-                    list[^1].Volume = Math.Max(list[^1].Volume, activeCandle.Volume);
+                    match.High = Math.Max(match.High, activeCandle.High);
+                    match.Low = Math.Min(match.Low, activeCandle.Low);
+                    match.Close = activeCandle.Close;
+                    match.Volume = Math.Max(match.Volume, activeCandle.Volume);
                 }
-                else if (list.Count == 0 || activeCandle.MinuteTimestamp > list[^1].Timestamp)
+                else
                 {
                     var dt = DateTimeOffset.FromUnixTimeSeconds(activeCandle.MinuteTimestamp).ToOffset(TimeSpan.FromHours(5.5));
                     list.Add(new HistoricalCandleDto
@@ -235,12 +299,150 @@ namespace FyersCopyTrading.Controllers
                 }
             }
 
-            // Strictly filter and sort ascending by time
-            list = list.Where(c => c.Timestamp >= todayOpenEpoch)
+            // Deduplicate by timestamp and sort ascending by time
+            list = list.GroupBy(c => c.Timestamp)
+                       .Select(g => g.Last())
                        .OrderBy(c => c.Timestamp)
                        .ToList();
 
+            // Ensure continuity: fill any missing intraday minutes so the chart has zero gaps between candles
+            list = EnsureIntradayContinuity(list, isMcx);
+
             return list;
+        }
+
+        // Fills any minute gaps during active market trading session with flat continuation (standard for live financial charting)
+        private static List<HistoricalCandleDto> EnsureIntradayContinuity(List<HistoricalCandleDto> candles, bool isMcx = false)
+        {
+            if (candles.Count == 0) return candles;
+            var result = new List<HistoricalCandleDto>();
+
+            // MCX market opens at 09:00 AM IST; NSE market opens at 09:15 AM IST
+            int marketOpenHour = isMcx ? 9 : 9;
+            int marketOpenMinute = isMcx ? 0 : 15;
+
+            for (int i = 0; i < candles.Count; i++)
+            {
+                var curr = candles[i];
+                var currIst = DateTimeOffset.FromUnixTimeSeconds(curr.Timestamp).ToOffset(TimeSpan.FromHours(5.5));
+
+                if (result.Count == 0)
+                {
+                    // Check if the very first candle of the first day is after market open
+                    var firstDayOpenIst = new DateTimeOffset(currIst.Year, currIst.Month, currIst.Day, marketOpenHour, marketOpenMinute, 0, TimeSpan.FromHours(5.5));
+                    long firstDayOpenEpoch = firstDayOpenIst.ToUnixTimeSeconds();
+                    if (curr.Timestamp > firstDayOpenEpoch && (curr.Timestamp - firstDayOpenEpoch) <= 28800) // within 8 hours
+                    {
+                        long fillTime = firstDayOpenEpoch;
+                        while (fillTime < curr.Timestamp)
+                        {
+                            var dt = DateTimeOffset.FromUnixTimeSeconds(fillTime).ToOffset(TimeSpan.FromHours(5.5));
+                            result.Add(new HistoricalCandleDto
+                            {
+                                Timestamp = fillTime,
+                                Datetime = dt.ToString("yyyy-MM-dd HH:mm:ss"),
+                                Open = curr.Open,
+                                High = curr.Open,
+                                Low = curr.Open,
+                                Close = curr.Open,
+                                Volume = 0
+                            });
+                            fillTime += 60;
+                        }
+                    }
+                }
+                else
+                {
+                    var prev = result[^1];
+                    var prevIst = DateTimeOffset.FromUnixTimeSeconds(prev.Timestamp).ToOffset(TimeSpan.FromHours(5.5));
+
+                    if (prevIst.Date == currIst.Date)
+                    {
+                        // Same trading day: fill ANY missing minute gap within this day's session
+                        long diff = curr.Timestamp - prev.Timestamp;
+                        if (diff > 60)
+                        {
+                            long fillTime = prev.Timestamp + 60;
+                            while (fillTime < curr.Timestamp)
+                            {
+                                var dt = DateTimeOffset.FromUnixTimeSeconds(fillTime).ToOffset(TimeSpan.FromHours(5.5));
+                                result.Add(new HistoricalCandleDto
+                                {
+                                    Timestamp = fillTime,
+                                    Datetime = dt.ToString("yyyy-MM-dd HH:mm:ss"),
+                                    Open = prev.Close,
+                                    High = prev.Close,
+                                    Low = prev.Close,
+                                    Close = prev.Close,
+                                    Volume = 0
+                                });
+                                fillTime += 60;
+                            }
+                        }
+                    }
+                    else
+                    {
+                        // Overnight transition: market opened anew on currIst.Date
+                        var dayOpenIst = new DateTimeOffset(currIst.Year, currIst.Month, currIst.Day, marketOpenHour, marketOpenMinute, 0, TimeSpan.FromHours(5.5));
+                        long dayOpenEpoch = dayOpenIst.ToUnixTimeSeconds();
+                        if (curr.Timestamp > dayOpenEpoch)
+                        {
+                            long fillTime = dayOpenEpoch;
+                            while (fillTime < curr.Timestamp)
+                            {
+                                var dt = DateTimeOffset.FromUnixTimeSeconds(fillTime).ToOffset(TimeSpan.FromHours(5.5));
+                                result.Add(new HistoricalCandleDto
+                                {
+                                    Timestamp = fillTime,
+                                    Datetime = dt.ToString("yyyy-MM-dd HH:mm:ss"),
+                                    Open = curr.Open,
+                                    High = curr.Open,
+                                    Low = curr.Open,
+                                    Close = curr.Open,
+                                    Volume = 0
+                                });
+                                fillTime += 60;
+                            }
+                        }
+                    }
+                }
+
+                result.Add(curr);
+            }
+
+            // Extend up to current minute if market is currently active today
+            if (result.Count > 0)
+            {
+                var last = result[^1];
+                var nowIst = DateTimeOffset.UtcNow.ToOffset(TimeSpan.FromHours(5.5));
+                var lastIst = DateTimeOffset.FromUnixTimeSeconds(last.Timestamp).ToOffset(TimeSpan.FromHours(5.5));
+
+                if (lastIst.Date == nowIst.Date)
+                {
+                    long currentMinuteEpoch = (nowIst.ToUnixTimeSeconds() / 60) * 60;
+                    if (currentMinuteEpoch > last.Timestamp)
+                    {
+                        long fillTime = last.Timestamp + 60;
+                        while (fillTime <= currentMinuteEpoch)
+                        {
+                            var dt = DateTimeOffset.FromUnixTimeSeconds(fillTime).ToOffset(TimeSpan.FromHours(5.5));
+                            result.Add(new HistoricalCandleDto
+                            {
+                                Timestamp = fillTime,
+                                Datetime = dt.ToString("yyyy-MM-dd HH:mm:ss"),
+                                Open = last.Close,
+                                High = last.Close,
+                                Low = last.Close,
+                                Close = last.Close,
+                                Volume = 0
+                            });
+                            fillTime += 60;
+                        }
+                    }
+                }
+            }
+
+            return result;
         }
 
         private async Task<List<HistoricalCandleDto>> FetchTodayFyersCandlesAsync(string cleanName, bool isMcx, DateTime todayIst, long todayOpenEpoch)
@@ -257,7 +459,7 @@ namespace FyersCopyTrading.Controllers
                 {
                     fyersSymbol = cleanName.ToUpperInvariant() switch
                     {
-                        "GOLD" => "MCX:GOLD26OCTFUT",
+                        "GOLD" => "MCX:GOLD26DECFUT",
                         "SILVER" => "MCX:SILVER26DECFUT",
                         "CRUDEOIL" => "MCX:CRUDEOIL26OCTFUT",
                         "NATGAS" or "NATURALGAS" => "MCX:NATURALGAS26OCTFUT",
@@ -279,10 +481,26 @@ namespace FyersCopyTrading.Controllers
                     };
                 }
 
-                string url = $"https://api-t1.fyers.in/data/history?symbol={Uri.EscapeDataString(fyersSymbol)}&resolution=1&date_format=1&range_from={todayIst:yyyy-MM-dd}&range_to={todayIst:yyyy-MM-dd}&cont_flag=1";
+                string fromDate = todayIst.ToString("yyyy-MM-dd");
+                string toDate = todayIst.ToString("yyyy-MM-dd");
+                string url = $"https://api-t1.fyers.in/data/history?symbol={Uri.EscapeDataString(fyersSymbol)}&resolution=1&date_format=1&range_from={fromDate}&range_to={toDate}&cont_flag=1";
                 var req = new HttpRequestMessage(HttpMethod.Get, url);
                 req.Headers.TryAddWithoutValidation("Authorization", $"{appId}:{token}");
                 var resp = await _httpClient.SendAsync(req);
+                Console.WriteLine($"[Fyers History] {fyersSymbol} -> Status: {resp.StatusCode}");
+
+                if (!resp.IsSuccessStatusCode)
+                {
+                    string errBody = await resp.Content.ReadAsStringAsync();
+                    Console.WriteLine($"[Fyers History Failed] {errBody}");
+                    fromDate = todayIst.AddDays(-4).ToString("yyyy-MM-dd");
+                    url = $"https://api-t1.fyers.in/data/history?symbol={Uri.EscapeDataString(fyersSymbol)}&resolution=1&date_format=1&range_from={fromDate}&range_to={toDate}&cont_flag=1";
+                    req = new HttpRequestMessage(HttpMethod.Get, url);
+                    req.Headers.TryAddWithoutValidation("Authorization", $"{appId}:{token}");
+                    resp = await _httpClient.SendAsync(req);
+                    Console.WriteLine($"[Fyers History Retry] {fyersSymbol} -> Status: {resp.StatusCode}");
+                }
+
                 if (resp.IsSuccessStatusCode)
                 {
                     var json = await resp.Content.ReadAsStringAsync();
@@ -293,30 +511,31 @@ namespace FyersCopyTrading.Controllers
                         foreach (var arr in candles.EnumerateArray())
                         {
                             long ts = arr[0].GetInt64();
-                            if (ts >= todayOpenEpoch)
+                            decimal open = arr[1].GetDecimal();
+                            decimal high = arr[2].GetDecimal();
+                            decimal low = arr[3].GetDecimal();
+                            decimal close = arr[4].GetDecimal();
+                            long vol = arr[5].GetInt64();
+                            var dt = DateTimeOffset.FromUnixTimeSeconds(ts).ToOffset(TimeSpan.FromHours(5.5));
+                            result.Add(new HistoricalCandleDto
                             {
-                                decimal open = arr[1].GetDecimal();
-                                decimal high = arr[2].GetDecimal();
-                                decimal low = arr[3].GetDecimal();
-                                decimal close = arr[4].GetDecimal();
-                                long vol = arr[5].GetInt64();
-                                var dt = DateTimeOffset.FromUnixTimeSeconds(ts).ToOffset(TimeSpan.FromHours(5.5));
-                                result.Add(new HistoricalCandleDto
-                                {
-                                    Timestamp = ts,
-                                    Datetime = dt.ToString("yyyy-MM-dd HH:mm:ss"),
-                                    Open = open,
-                                    High = high,
-                                    Low = low,
-                                    Close = close,
-                                    Volume = vol
-                                });
-                            }
+                                Timestamp = ts,
+                                Datetime = dt.ToString("yyyy-MM-dd HH:mm:ss"),
+                                Open = open,
+                                High = high,
+                                Low = low,
+                                Close = close,
+                                Volume = vol
+                            });
                         }
                     }
+                    Console.WriteLine($"[Fyers History Success] {fyersSymbol} -> Parsed {result.Count} candles");
                 }
             }
-            catch { }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[Fyers History Exception] {ex.Message}");
+            }
             return result;
         }
     }

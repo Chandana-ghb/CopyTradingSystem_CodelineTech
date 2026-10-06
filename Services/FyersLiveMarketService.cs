@@ -23,6 +23,7 @@ namespace FyersCopyTrading.Services
         private readonly ILogger<FyersLiveMarketService> _logger;
         private readonly IHubContext<MarketHub> _hubContext;
         private readonly IConfiguration _config;
+        private readonly IServiceScopeFactory _scopeFactory;
         private readonly HttpClient _httpClient;
 
         private FyersSocket? _socketClient;
@@ -60,14 +61,16 @@ namespace FyersCopyTrading.Services
         public FyersLiveMarketService(
             ILogger<FyersLiveMarketService> logger,
             IHubContext<MarketHub> hubContext,
-            IConfiguration config)
+            IConfiguration config,
+            IServiceScopeFactory scopeFactory)
         {
             _logger = logger;
             _hubContext = hubContext;
             _config = config;
+            _scopeFactory = scopeFactory;
 
             _appId = _config["Fyers:AppId"] ?? "ZZQW1QXQFO-100";
-            _accessToken = _config["Fyers:AccessToken"] ?? "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhdWQiOlsiZDoxIiwiZDoyIiwieDowIiwieDoxIl0sImF0X2hhc2giOiJnQUFBQUFCcXd4b21nb1d0REM2WnpqSy0zVmtlT09fQV96QVdvbXhMR2xZLTBiSFVOSERhZ0RfMzdvTGZiV1ZuZXlwTGg5MjNBRE1TUWxWYzhJQ3F2WmphWnV5VnEyZkNDLVRQNksyRFFwU25RcTRFOGRqMThoOD0iLCJkaXNwbGF5X25hbWUiOiIiLCJvbXMiOiJLMSIsImhzbV9rZXkiOiIyM2E2MmEzNDM1NTlkOGIzYWNiYmFmZjZjZTljYWMwMDc4NDFiODM2MGNmMmM4ZmY5ZDc3NjZhMCIsImlzRGRwaUVuYWJsZWQiOiJOIiwiaXNNdGZFbmFibGVkIjoiTiIsImZ5X2lkIjoiRkFLODg0NTUiLCJhcHBUeXBlIjoxMDAsImV4cCI6MTc5MTI0NjYwMCwiaWF0IjoxNzkxMTcxMTEwLCJpc3MiOiJhcGkuZnllcnMuaW4iLCJuYmYiOjE3OTExNzExMTAsInN1YiI6ImFjY2Vzc190b2tlbiJ9.pj6ceuoPzskOh4V824zpn282EV3tWQfB14OLPy68uX8";
+            _accessToken = _config["Fyers:AccessToken"] ?? "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhdWQiOlsiZDoxIiwiZDoyIiwieDowIiwieDoxIl0sImF0X2hhc2giOiJnQUFBQUFCcXhHd0I3X0JGMlo4c2RTXzNNWGswTUhRWk5tbUx3ZmJyblBIXzZndGVaSEVxUEs2RDJlSmZSTjhhUkZVb0UtZWpzeWZsemM0Q0l5OE5NOTAyZGxTYW5MRnhleWVyeDZ3Y0ltQTNzZE5fdTM0eTJ3UT0iLCJkaXNwbGF5X25hbWUiOiIiLCJvbXMiOiJLMSIsImhzbV9rZXkiOiIyM2E2MmEzNDM1NTlkOGIzYWNiYmFmZjZjZTljYWMwMDc4NDFiODM2MGNmMmM4ZmY5ZDc3NjZhMCIsImlzRGRwaUVuYWJsZWQiOiJOIiwiaXNNdGZFbmFibGVkIjoiTiIsImZ5X2lkIjoiRkFLODg0NTUiLCJhcHBUeXBlIjoxMDAsImV4cCI6MTc5MTMzMzAwMCwiaWF0IjoxNzkxMjU3NjAxLCJpc3MiOiJhcGkuZnllcnMuaW4iLCJuYmYiOjE3OTEyNTc2MDEsInN1YiI6ImFjY2Vzc190b2tlbiJ9.MPt81X-otIXhaDhg8DyMgLB5U4aDC60iLEXYz-ph3kE";
 
             _dataBaseDir = Path.Combine(Directory.GetCurrentDirectory(), "Data");
             _mcxDir = Path.Combine(_dataBaseDir, "MCX");
@@ -257,6 +260,18 @@ namespace FyersCopyTrading.Services
 
             // 3. Broadcast real-time tick to Angular frontend via SignalR with live candle data
             BroadcastTick(systemSymbol, cleanName, category, ltp, high, low, prevClose, ch, chp, activeBar);
+
+            // 4. Check for Stop-Loss or Target Price execution triggers
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    using var scope = _scopeFactory.CreateScope();
+                    var copyService = scope.ServiceProvider.GetRequiredService<CopyTradingService>();
+                    await copyService.CheckAndTriggerStopLossOrTargetAsync(systemSymbol, ltp);
+                }
+                catch { }
+            });
         }
 
         public static (string Category, string CleanName, string SystemSymbol) ResolveStockInfo(string rawSymbol)
@@ -429,7 +444,9 @@ namespace FyersCopyTrading.Services
                 {
                     try
                     {
-                        string lineStr = $"{minuteTs},{open.ToString(CultureInfo.InvariantCulture)},{high.ToString(CultureInfo.InvariantCulture)},{low.ToString(CultureInfo.InvariantCulture)},{close.ToString(CultureInfo.InvariantCulture)},{volume}";
+                        var dtIst = DateTimeOffset.FromUnixTimeSeconds(minuteTs).ToOffset(TimeSpan.FromHours(5.5));
+                        string timeStr = dtIst.ToString("yyyy-MM-dd HH:mm:ss");
+                        string lineStr = $"{timeStr},{open.ToString(CultureInfo.InvariantCulture)},{high.ToString(CultureInfo.InvariantCulture)},{low.ToString(CultureInfo.InvariantCulture)},{close.ToString(CultureInfo.InvariantCulture)},{volume}";
 
                         if (!File.Exists(filePath))
                         {
@@ -472,8 +489,22 @@ namespace FyersCopyTrading.Services
                         if (!string.IsNullOrWhiteSpace(lastLine) && !lastLine.StartsWith("Timestamp"))
                         {
                             var parts = lastLine.Split(',');
-                            if (parts.Length >= 6 && long.TryParse(parts[0], out long lastTs))
+                            if (parts.Length >= 6)
                             {
+                                long lastTs = 0;
+                                if (long.TryParse(parts[0], out long parsedTs))
+                                {
+                                    lastTs = parsedTs;
+                                }
+                                else if (DateTime.TryParse(parts[0], CultureInfo.InvariantCulture, DateTimeStyles.None, out DateTime parsedDt))
+                                {
+                                    lastTs = new DateTimeOffset(parsedDt, TimeSpan.FromHours(5.5)).ToUnixTimeSeconds();
+                                }
+                                else if (DateTime.TryParse(parts[0], out DateTime fallbackDt))
+                                {
+                                    lastTs = new DateTimeOffset(fallbackDt, TimeSpan.FromHours(5.5)).ToUnixTimeSeconds();
+                                }
+
                                 if (lastTs == minuteTs)
                                 {
                                     // Overwrite last line with updated candle
@@ -527,17 +558,38 @@ namespace FyersCopyTrading.Services
 
         private async Task PollLiveQuotesInternalAsync()
         {
-            var symbols = new List<string>(McxActiveSymbols);
-            foreach (var s in Nifty50Universe.GetSymbols())
+            // 1. Dedicated safe poll for MCX commodities
+            foreach (var sym in McxActiveSymbols)
             {
-                if (s == "NSE:NIFTY50-INDEX" || s == "NSE:TATAMOTORS-EQ") continue;
-                symbols.Add(s);
+                try
+                {
+                    string url = $"https://api-t1.fyers.in/data/quotes?symbols={Uri.EscapeDataString(sym)}";
+                    using var resp = await _httpClient.GetAsync(url);
+                    if (resp.IsSuccessStatusCode)
+                    {
+                        string json = await resp.Content.ReadAsStringAsync();
+                        using var doc = JsonDocument.Parse(json);
+                        var root = doc.RootElement;
+                        if (root.TryGetProperty("d", out var dArray) && dArray.ValueKind == JsonValueKind.Array)
+                        {
+                            foreach (var item in dArray.EnumerateArray())
+                            {
+                                ProcessQuoteItem(item);
+                            }
+                        }
+                    }
+                }
+                catch { }
             }
 
-            // Chunk requests into batches of 25
-            for (int i = 0; i < symbols.Count; i += 25)
+            // 2. Nifty 50 stocks in chunks of 25
+            var niftySymbols = Nifty50Universe.GetSymbols()
+                .Where(s => s != "NSE:NIFTY50-INDEX" && s != "NSE:TATAMOTORS-EQ")
+                .ToList();
+
+            for (int i = 0; i < niftySymbols.Count; i += 25)
             {
-                var chunk = symbols.Skip(i).Take(25).ToList();
+                var chunk = niftySymbols.Skip(i).Take(25).ToList();
                 string joined = string.Join(",", chunk.Select(Uri.EscapeDataString));
                 string url = $"https://api-t1.fyers.in/data/quotes?symbols={joined}";
 
@@ -553,34 +605,40 @@ namespace FyersCopyTrading.Services
                         {
                             foreach (var item in dArray.EnumerateArray())
                             {
-                                if (item.TryGetProperty("n", out var nProp) && item.TryGetProperty("v", out var vProp))
-                                {
-                                    string sym = nProp.GetString() ?? "";
-                                    if (vProp.TryGetProperty("lp", out var lpProp))
-                                    {
-                                        decimal ltp = lpProp.GetDecimal();
-                                        decimal high = vProp.TryGetProperty("high_price", out var hp) ? hp.GetDecimal() : ltp;
-                                        decimal low = vProp.TryGetProperty("low_price", out var lop) ? lop.GetDecimal() : ltp;
-                                        decimal open = vProp.TryGetProperty("open_price", out var op) ? op.GetDecimal() : ltp;
-                                        decimal prevClose = vProp.TryGetProperty("prev_close_price", out var pcp) ? pcp.GetDecimal() : ltp;
-                                        decimal ch = vProp.TryGetProperty("ch", out var chProp) ? chProp.GetDecimal() : 0m;
-                                        decimal chp = vProp.TryGetProperty("chp", out var chpProp) ? chpProp.GetDecimal() : 0m;
-                                        long volume = vProp.TryGetProperty("volume", out var volProp) ? volProp.GetInt64() : 0;
-                                        long tt = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-
-                                        var (category, cleanName, systemSymbol) = ResolveStockInfo(sym);
-                                        UpdateInMemoryStock(systemSymbol, cleanName, category, ltp, high, low, open, prevClose, ch, chp);
-                                        var activeBar = RecordCandleToFile(category, cleanName, tt, ltp, volume);
-                                        BroadcastTick(systemSymbol, cleanName, category, ltp, high, low, prevClose, ch, chp, activeBar);
-                                    }
-                                }
+                                ProcessQuoteItem(item);
                             }
                         }
                     }
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogTrace("[Fyers Quotes Poll] Batch poll issue: {Message}", ex.Message);
+                    _logger.LogTrace("[Fyers Quotes Poll] Nifty batch poll issue: {Message}", ex.Message);
+                }
+            }
+        }
+
+        private void ProcessQuoteItem(JsonElement item)
+        {
+            if (item.TryGetProperty("n", out var nProp) && item.TryGetProperty("v", out var vProp))
+            {
+                string sym = nProp.GetString() ?? "";
+                if (vProp.TryGetProperty("lp", out var lpProp))
+                {
+                    decimal ltp = lpProp.GetDecimal();
+                    if (ltp <= 0) return;
+                    decimal high = vProp.TryGetProperty("high_price", out var hp) ? hp.GetDecimal() : ltp;
+                    decimal low = vProp.TryGetProperty("low_price", out var lop) ? lop.GetDecimal() : ltp;
+                    decimal open = vProp.TryGetProperty("open_price", out var op) ? op.GetDecimal() : ltp;
+                    decimal prevClose = vProp.TryGetProperty("prev_close_price", out var pcp) ? pcp.GetDecimal() : ltp;
+                    decimal ch = vProp.TryGetProperty("ch", out var chProp) ? chProp.GetDecimal() : 0m;
+                    decimal chp = vProp.TryGetProperty("chp", out var chpProp) ? chpProp.GetDecimal() : 0m;
+                    long volume = vProp.TryGetProperty("volume", out var volProp) ? volProp.GetInt64() : 0;
+                    long tt = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+
+                    var (category, cleanName, systemSymbol) = ResolveStockInfo(sym);
+                    UpdateInMemoryStock(systemSymbol, cleanName, category, ltp, high, low, open, prevClose, ch, chp);
+                    var activeBar = RecordCandleToFile(category, cleanName, tt, ltp, volume);
+                    BroadcastTick(systemSymbol, cleanName, category, ltp, high, low, prevClose, ch, chp, activeBar);
                 }
             }
         }
